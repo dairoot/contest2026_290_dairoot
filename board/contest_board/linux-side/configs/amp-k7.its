@@ -1,0 +1,74 @@
+/*
+ * KickPi K7 (RK3576) AMP firmware FIT source — openvela on cpu3.
+ *
+ * amp3 = openvela nuttx.bin, loaded at 0x41800000 and started by U-Boot
+ * (CONFIG_ROCKCHIP_AMP) via PSCI CPU_ON before Linux boots.
+ *
+ * Reproduction: build openvela (nuttx/nuttx.bin), copy it to the SDK's
+ * output/rtt3.bin, then pack:
+ *   cd output && ln -sf ../device/rockchip/.chips/rk3576/amp-k7.its amp.its
+ *   sed -i '/share {/,/}/d;/compile {/,/}/d' amp.its
+ *   ../rkbin/tools/mkimage -f amp.its -E -p 0xe00 amp.img
+ *
+ * The linux{} node moves kernel_addr_r to 0x42000000 so the decompressed
+ * kernel cannot overwrite the 0x41800000+8MB AMP region.
+ */
+
+/dts-v1/;
+/ {
+	description = "KickPi K7 AMP: openvela on cpu3";
+	#address-cells = <1>;
+
+	images {
+		amp3 {
+			description = "openvela";
+			data = /incbin/("rtt3.bin");
+			type = "firmware";
+			compression = "none";
+			arch = "arm64";
+			cpu = <0x3>;		/* MPIDR: A53 cluster0 core3 */
+			thumb = <0>;
+			hyp = <1>;		/* arm64+hyp = default PE state: pure PSCI CPU_ON */
+			load = <0x41800000>;
+			size = <0x800000>;
+			udelay = <10000>;
+			hash {
+				algo = "sha256";
+			};
+		};
+	};
+
+	/* build-time only, stripped before mkimage */
+	share {
+		shm_base = <0x47c00000>;
+		shm_size = <0x00400000>;
+		rpmsg_base = <0x47800000>;
+		rpmsg_size = <0x00400000>;
+		primary = <0x0>;
+	};
+
+	configurations {
+		default = "conf";
+		conf {
+			description = "Rockchip AMP images";
+			rollback-index = <0x0>;
+			loadables = "amp3";
+			signature {
+				algo = "sha256,rsa2048";
+				padding = "pss";
+				key-name-hint = "dev";
+				sign-images = "loadables";
+			};
+			linux {
+				description = "linux-os";
+				arch = "arm64";
+				cpu = <0x0>;
+				thumb = <0>;
+				hyp = <0>;
+				udelay = <0>;
+				load = <0x42000000>;
+				load_c = <0x45480000>;
+			};
+		};
+	};
+};

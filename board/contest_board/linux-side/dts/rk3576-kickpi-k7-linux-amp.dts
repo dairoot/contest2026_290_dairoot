@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * KickPi K7 Linux + AMP (openvela on cpu3) variant.
+ */
+
+/* Reuse the stock K7 Linux board file wholesale, then apply AMP overlay */
+#include "rk3576-kickpi-k7-linux.dts"
+#include "rk3576-kickpi-k7-amp.dtsi"
+
+/ {
+	model = "Rockchip RK3576 KICKPI K7 Board (AMP)";
+};

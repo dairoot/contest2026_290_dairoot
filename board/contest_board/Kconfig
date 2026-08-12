@@ -1,11 +1,27 @@
 #
-# Contest 2026 team 000 board placeholder
+# Contest 2026 team 290 board: KickPi K7 (RK3576) — openvela AMP slave
+# running on cpu3 alongside a 7-core Linux.
 #
 
-if ARCH_BOARD_CONTEST2026_000_BOARD
+config ARCH_BOARD_CONTEST2026_290_BOARD
+	bool
+	default y
 
-config ARCH_BOARD_CONTEST2026_000_BOARD_TAG
+if ARCH_BOARD_CONTEST2026_290_BOARD
+
+config ARCH_BOARD_CONTEST2026_290_BOARD_TAG
 	string "Board tag"
-	default "contest2026_000_board"
+	default "contest2026_290_board"
+
+config RK3576_AMP_HEARTBEAT
+	bool "AMP heartbeat + defensive IRQ re-enable thread"
+	default y
+	---help---
+		Every 500ms: bump the shared-memory heartbeat block at 0x47c00000
+		(magic "K7AM", version=3) so Linux can verify this core is alive
+		via devmem, and re-assert the GICD_ISENABLER bits of the SPIs owned
+		by this core (UART5=113, rpmsg=172).  The Linux GIC init clears
+		those enable bits once at boot (its AMP patches only preserve
+		routing and priority), so the re-assert is required.
 
 endif

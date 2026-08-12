@@ -1,0 +1,45 @@
+From 70f785b61dd6c47ddb2384f4942e00a7b79f90b4 Mon Sep 17 00:00:00 2001
+From: dai <dai623815825@gmail.com>
+Date: Wed, 12 Aug 2026 21:05:02 +0800
+Subject: [PATCH 5/5] fix(rk3576): correct the pull-up/pull-down encoding
+
+RK3576 does not use the usual Rockchip pull encoding.  Every bank is
+declared PULL_TYPE_IO_1 in pinctrl-rockchip.c, and that row of
+rockchip_pull_list[] is { disable, pull-down, disable, pull-up } -- so
+1 selects a pull-DOWN and a pull-up is 3.
+
+rk3576_soc.h had 1 = up and 2 = down, which meant board_boot.c has been
+applying a pull-down to the UART5 RX line all along.  It never showed:
+the USB-TTL adapter on the other end drives the line hard enough to win.
+Found while probing pad states over /dev/mem to check some microphone
+wiring, where the inverted bias made every reading come out backwards.
+---
+ arch/arm64/src/rk3576/rk3576_soc.h | 13 ++++++++++---
+ 1 file changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm64/src/rk3576/rk3576_soc.h b/arch/arm64/src/rk3576/rk3576_soc.h
+index 584b5e28524..34c8ddb94aa 100644
+--- a/arch/arm64/src/rk3576/rk3576_soc.h
++++ b/arch/arm64/src/rk3576/rk3576_soc.h
+@@ -51,11 +51,18 @@
+ #define RK3576_PIN_C(idx)       RK3576_PIN(2, idx)
+ #define RK3576_PIN_D(idx)       RK3576_PIN(3, idx)
+ 
+-/* Pull configuration values (RK3576 uses 2 bits per pin) */
++/* Pull configuration values (RK3576 uses 2 bits per pin).
++ *
++ * NOT the encoding most Rockchip SoCs use.  Every RK3576 bank is declared
++ * PULL_TYPE_IO_1 in pinctrl-rockchip.c, whose rockchip_pull_list[] row is
++ * { disable, pull-down, disable, pull-up } — so 1 is a pull-DOWN and a
++ * pull-up is 3, not 1.  Getting this backwards is silent: the pin still
++ * works whenever something external drives it hard enough.
++ */
+ 
+ #define RK3576_PULL_NONE        0
+-#define RK3576_PULL_UP          1
+-#define RK3576_PULL_DOWN        2
++#define RK3576_PULL_DOWN        1
++#define RK3576_PULL_UP          3
+ 
+ /****************************************************************************
+  * Public Function Prototypes
