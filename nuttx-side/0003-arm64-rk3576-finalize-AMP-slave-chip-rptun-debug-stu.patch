@@ -1,0 +1,128 @@
+From 8d341596115f92338c913251f9ecdefcadda8ad1 Mon Sep 17 00:00:00 2001
+From: dai <dai623815825@gmail.com>
+Date: Wed, 12 Aug 2026 11:15:18 +0800
+Subject: [PATCH 3/5] arm64/rk3576: finalize AMP-slave chip + rptun (debug
+ stubs removed)
+
+Clean version verified on KickPi K7: openvela on cpu3, heartbeat v3 at
+500ms, /dev/ttyRPMSG0 bidirectional echo 50/50, 7-core Linux intact.
+---
+ arch/arm64/include/rk3576/chip.h        |  4 ++
+ arch/arm64/src/rk3576/rk3576_rptun.c    |  2 +-
+ arch/arm64/src/rk3576/rk3576_rsctable.c | 55 ++++++++++++++++++++++---
+ 3 files changed, 55 insertions(+), 6 deletions(-)
+
+diff --git a/arch/arm64/include/rk3576/chip.h b/arch/arm64/include/rk3576/chip.h
+index d014d23f2ba..0f95c19f68f 100644
+--- a/arch/arm64/include/rk3576/chip.h
++++ b/arch/arm64/include/rk3576/chip.h
+@@ -73,6 +73,10 @@
+ #define RK3576_IRQ_RPMSG_RX       172   /* Linux -> us (irq_retrigger) */
+ #define RK3576_IRQ_RPMSG_TX       173   /* us -> Linux (GICD_ISPENDR)  */
+ 
++/* AMP interrupt priority, matches the Linux amp-irqs DTS property */
++
++#define RK3576_AMP_IRQ_PRIO_VAL   0xd0
++
+ #define MPID_TO_CLUSTER_ID(mpid)  ((mpid) & ~0xff)
+ 
+ /****************************************************************************
+diff --git a/arch/arm64/src/rk3576/rk3576_rptun.c b/arch/arm64/src/rk3576/rk3576_rptun.c
+index f912e5cc694..39a1c278ddf 100644
+--- a/arch/arm64/src/rk3576/rk3576_rptun.c
++++ b/arch/arm64/src/rk3576/rk3576_rptun.c
+@@ -75,7 +75,7 @@ static int  rk3576_rptun_register_callback(struct rptun_dev_s *dev,
+  * Private Data
+  ****************************************************************************/
+ 
+-extern const struct rptun_rsc_s g_rk3576_rsc_table;
++extern struct rptun_rsc_s g_rk3576_rsc_table;
+ 
+ static struct rk3576_rptun_dev_s g_rptun_dev;
+ 
+diff --git a/arch/arm64/src/rk3576/rk3576_rsctable.c b/arch/arm64/src/rk3576/rk3576_rsctable.c
+index 90b489cca28..f2a3742986b 100644
+--- a/arch/arm64/src/rk3576/rk3576_rsctable.c
++++ b/arch/arm64/src/rk3576/rk3576_rsctable.c
+@@ -39,14 +39,29 @@
+ #define VRING_SIZE              0x8000      /* RPMSG_VRING_SIZE (Linux)  */
+ 
+ #define NO_RESOURCE_ENTRIES     (2)
+-#define RSC_VDEV_FEATURE_NS     (1)         /* name-service announcement */
++
++/* Device features.  NuttX's rpmsg_virtio DEBUGASSERTs that CPUNAME is
++ * present (it reads the local/peer cpu names from the config space below);
++ * NS is the actual name-service announcement bit that Linux understands.
++ * CPUNAME is read locally and never crosses the wire, so it is invisible to
++ * the Linux master.
++ */
++
++#define RSC_VDEV_FEATURES       ((1U << VIRTIO_RPMSG_F_NS) | \
++                                 (1U << VIRTIO_RPMSG_F_CPUNAME))
+ #define RK3576_RSC_TABLE_VERSION (1)
+ 
+ /****************************************************************************
+  * Public Data
+  ****************************************************************************/
+ 
+-const struct rptun_rsc_s g_rk3576_rsc_table =
++/* NOT const: OpenAMP's resource-table parser writes back into this table
++ * (vdev status, vring notifyids, etc.) during rproc init, so it must live
++ * in writable memory.  Placing it in .rodata causes a permission fault
++ * (ESR EC=0x25 DFSC=0x0f) inside handle_vdev_rsc().
++ */
++
++struct rptun_rsc_s g_rk3576_rsc_table =
+ {
+   .rsc_tbl_hdr =
+   {
+@@ -73,8 +88,32 @@ const struct rptun_rsc_s g_rk3576_rsc_table =
+     RSC_VDEV,
+     VIRTIO_ID_RPMSG,        /* 7 */
+     2,                      /* notifyid */
+-    RSC_VDEV_FEATURE_NS,    /* dfeatures: NS only */
+-    0, 0, 0,
++    RSC_VDEV_FEATURES,      /* dfeatures: NS + CPUNAME */
++
++    /* gfeatures: normally written by the driver after negotiation, but the
++     * Linux master never touches this table, so pre-set it equal to
++     * dfeatures.  openamp uses (dfeatures & gfeatures) as the active set.
++     */
++
++    RSC_VDEV_FEATURES,
++
++    /* config_len: size of the fw_rsc_config that immediately follows the
++     * vrings in this table.  openamp locates the virtio config space there;
++     * with config_len=0 the DEVICE side reads an empty cpuname and the
++     * uart_rpmsg binding (strcmp against "linux") silently fails.
++     */
++
++    sizeof(struct fw_rsc_config),
++
++    /* status: pre-set DRIVER_OK.  The standard OpenAMP handshake has the
++     * master write DRIVER_OK into a *shared* resource table for the remote
++     * (device) side to poll, but our master is Linux rockchip_rpmsg_softirq
++     * which never touches a resource table (it uses fixed vring addresses).
++     * So we assert master-ready ourselves; the Linux side has already
++     * initialised both vrings by the time this table is parsed.
++     */
++
++    VIRTIO_CONFIG_STATUS_DRIVER_OK,
+     NUM_VRINGS,
+     {
+       0, 0
+@@ -101,7 +140,13 @@ const struct rptun_rsc_s g_rk3576_rsc_table =
+ 
+   .config =
+   {
+-    0
++    0, 0,                   /* h2r/r2h buf size (no BUFSZ feature) */
++    0, 0,                   /* h2r/r2h buf addr (no BUFADDR feature) */
++    "linux",                /* host_cpuname: the Linux master */
++    "nuttx",                /* remote_cpuname: us (cpu3) */
++    0,                      /* priority (no PRIORITY feature) */
++    {0, 0, 0},              /* reserved1 */
++    {0, 0, 0, 0, 0}         /* reserved2 */
+   },
+ 
+   /* rpmsg buffer pool (Linux allocates from its rpmsg-dma reserved region;

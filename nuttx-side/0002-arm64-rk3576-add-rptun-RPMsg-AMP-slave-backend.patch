@@ -1,0 +1,511 @@
+From 71fb363ecc2a74b6d925a7e5b195498bd0f58eb4 Mon Sep 17 00:00:00 2001
+From: dai <dai623815825@gmail.com>
+Date: Tue, 11 Aug 2026 23:41:29 +0800
+Subject: [PATCH 2/5] arm64/rk3576: add rptun/RPMsg AMP-slave backend
+
+Static resource table + rptun ops for the RK3576 AMP slave talking to the
+Linux master (rockchip_rpmsg_softirq). REMOTE role, fixed vrings at
+0x47800000/0x47808000 (64 desc, NS-only features), notify via GICD_ISPENDR
+(INTID 173), rx kick on INTID 172. Identity addrenv (flat-mapped shmem).
+---
+ arch/arm64/src/rk3576/CMakeLists.txt    |  15 ++
+ arch/arm64/src/rk3576/Make.defs         |  10 +-
+ arch/arm64/src/rk3576/rk3576_addrenv.c  |  35 ++++
+ arch/arm64/src/rk3576/rk3576_rptun.c    | 215 ++++++++++++++++++++++++
+ arch/arm64/src/rk3576/rk3576_rptun.h    |  49 ++++++
+ arch/arm64/src/rk3576/rk3576_rsctable.c | 120 +++++++++++++
+ 6 files changed, 441 insertions(+), 3 deletions(-)
+ create mode 100644 arch/arm64/src/rk3576/CMakeLists.txt
+ create mode 100644 arch/arm64/src/rk3576/rk3576_addrenv.c
+ create mode 100644 arch/arm64/src/rk3576/rk3576_rptun.c
+ create mode 100644 arch/arm64/src/rk3576/rk3576_rptun.h
+ create mode 100644 arch/arm64/src/rk3576/rk3576_rsctable.c
+
+diff --git a/arch/arm64/src/rk3576/CMakeLists.txt b/arch/arm64/src/rk3576/CMakeLists.txt
+new file mode 100644
+index 00000000000..33653b34873
+--- /dev/null
++++ b/arch/arm64/src/rk3576/CMakeLists.txt
+@@ -0,0 +1,15 @@
++# ##############################################################################
++# arch/arm64/src/rk3576/CMakeLists.txt
++#
++# RK3576 chip layer: openvela AMP slave (Cortex-A53) alongside Linux.
++#
++# SPDX-License-Identifier: Apache-2.0
++# ##############################################################################
++
++set(SRCS rk3576_boot.c rk3576_serial.c rk3576_addrenv.c)
++
++if(CONFIG_RPTUN)
++  list(APPEND SRCS rk3576_rptun.c rk3576_rsctable.c)
++endif()
++
++target_sources(arch PRIVATE ${SRCS})
+diff --git a/arch/arm64/src/rk3576/Make.defs b/arch/arm64/src/rk3576/Make.defs
+index 8a86ae4dfca..593b27ece4d 100644
+--- a/arch/arm64/src/rk3576/Make.defs
++++ b/arch/arm64/src/rk3576/Make.defs
+@@ -1,7 +1,7 @@
+ ############################################################################
+-# board/contest_board/chip/Make.defs
++# arch/arm64/src/rk3576/Make.defs
+ #
+-# RK3576 custom chip layer for the openvela AMP slave build.
++# RK3576 chip layer: openvela AMP slave (Cortex-A53) alongside Linux.
+ #
+ # SPDX-License-Identifier: Apache-2.0
+ ############################################################################
+@@ -10,4 +10,8 @@ include common/Make.defs
+ 
+ # C source files specific to the SoC
+ 
+-CHIP_CSRCS  = rk3576_boot.c rk3576_serial.c
++CHIP_CSRCS  = rk3576_boot.c rk3576_serial.c rk3576_addrenv.c
++
++ifeq ($(CONFIG_RPTUN),y)
++CHIP_CSRCS += rk3576_rptun.c rk3576_rsctable.c
++endif
+diff --git a/arch/arm64/src/rk3576/rk3576_addrenv.c b/arch/arm64/src/rk3576/rk3576_addrenv.c
+new file mode 100644
+index 00000000000..41ae1351251
+--- /dev/null
++++ b/arch/arm64/src/rk3576/rk3576_addrenv.c
+@@ -0,0 +1,35 @@
++/****************************************************************************
++ * arch/arm64/src/rk3576/rk3576_addrenv.c
++ *
++ * Identity physical<->virtual translation for the RK3576 AMP slave.
++ *
++ * The rptun / rpmsg-virtio layer translates the shared-memory addresses it
++ * finds in the resource table through up_addrenv_pa_to_va() /
++ * up_addrenv_va_to_pa().  This image runs MMU-enabled with a flat identity
++ * map (see rk3576_boot.c), so both are the identity function.
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ ****************************************************************************/
++
++/****************************************************************************
++ * Included Files
++ ****************************************************************************/
++
++#include <nuttx/config.h>
++#include <nuttx/arch.h>
++
++#include <stdint.h>
++
++/****************************************************************************
++ * Public Functions
++ ****************************************************************************/
++
++FAR void *up_addrenv_pa_to_va(uintptr_t pa)
++{
++  return (FAR void *)pa;
++}
++
++uintptr_t up_addrenv_va_to_pa(FAR void *va)
++{
++  return (uintptr_t)va;
++}
+diff --git a/arch/arm64/src/rk3576/rk3576_rptun.c b/arch/arm64/src/rk3576/rk3576_rptun.c
+new file mode 100644
+index 00000000000..f912e5cc694
+--- /dev/null
++++ b/arch/arm64/src/rk3576/rk3576_rptun.c
+@@ -0,0 +1,215 @@
++/****************************************************************************
++ * arch/arm64/src/rk3576/rk3576_rptun.c
++ *
++ * RK3576 AMP-slave rptun backend.
++ *
++ * Peer: Linux drivers/rpmsg/rockchip_rpmsg_softirq.c (master).  Transport
++ * is two reserved GIC SPIs, no mailbox:
++ *   - RX (INTID 172, GIC_SPI 140): Linux irq_retrigger()s it; the Linux
++ *     device tree (amp-irqs) routes it to this core.  One interrupt serves
++ *     both virtqueues, so the handler kicks the whole vdev.
++ *   - TX (INTID 173, GIC_SPI 141): we set it pending in GICD_ISPENDR; the
++ *     GIC delivers it to a Linux core whose threaded handler runs
++ *     vring_interrupt() on its rvq.
++ *
++ * Shared memory is Normal Non-cacheable on both sides (see the RK3576 MMU
++ * map and the Linux no-map reserved regions), so no cache maintenance.
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ ****************************************************************************/
++
++/****************************************************************************
++ * Included Files
++ ****************************************************************************/
++
++#include <nuttx/config.h>
++
++#include <string.h>
++#include <errno.h>
++
++#include <nuttx/arch.h>
++#include <nuttx/irq.h>
++#include <nuttx/rptun/rptun.h>
++#include <openamp/open_amp.h>
++
++#include <arch/chip/chip.h>
++
++#include "arm64_internal.h"
++#include "rk3576_rptun.h"
++
++/****************************************************************************
++ * Pre-processor Definitions
++ ****************************************************************************/
++
++#define GICD_ISPENDR(n)  (CONFIG_GICD_BASE + 0x200 + ((n) / 32) * 4)
++
++/****************************************************************************
++ * Private Types
++ ****************************************************************************/
++
++struct rk3576_rptun_dev_s
++{
++  struct rptun_dev_s rptun;
++  rptun_callback_t   callback;
++  void              *arg;
++  char               cpuname[RPMSG_NAME_SIZE + 1];
++};
++
++/****************************************************************************
++ * Private Function Prototypes
++ ****************************************************************************/
++
++static const char *rk3576_rptun_get_cpuname(struct rptun_dev_s *dev);
++static struct resource_table *
++rk3576_rptun_get_resource(struct rptun_dev_s *dev);
++static bool rk3576_rptun_is_autostart(struct rptun_dev_s *dev);
++static bool rk3576_rptun_is_master(struct rptun_dev_s *dev);
++static int  rk3576_rptun_start(struct rptun_dev_s *dev);
++static int  rk3576_rptun_stop(struct rptun_dev_s *dev);
++static int  rk3576_rptun_notify(struct rptun_dev_s *dev, uint32_t vqid);
++static int  rk3576_rptun_register_callback(struct rptun_dev_s *dev,
++                                           rptun_callback_t callback,
++                                           void *arg);
++
++/****************************************************************************
++ * Private Data
++ ****************************************************************************/
++
++extern const struct rptun_rsc_s g_rk3576_rsc_table;
++
++static struct rk3576_rptun_dev_s g_rptun_dev;
++
++static const struct rptun_ops_s g_rk3576_rptun_ops =
++{
++  .get_cpuname       = rk3576_rptun_get_cpuname,
++  .get_resource      = rk3576_rptun_get_resource,
++  .is_autostart      = rk3576_rptun_is_autostart,
++  .is_master         = rk3576_rptun_is_master,
++  .start             = rk3576_rptun_start,
++  .stop              = rk3576_rptun_stop,
++  .notify            = rk3576_rptun_notify,
++  .register_callback = rk3576_rptun_register_callback,
++};
++
++/****************************************************************************
++ * Private Functions
++ ****************************************************************************/
++
++static const char *rk3576_rptun_get_cpuname(struct rptun_dev_s *dev)
++{
++  struct rk3576_rptun_dev_s *priv =
++      container_of(dev, struct rk3576_rptun_dev_s, rptun);
++
++  return priv->cpuname;
++}
++
++static struct resource_table *
++rk3576_rptun_get_resource(struct rptun_dev_s *dev)
++{
++  /* Static table in DRAM; the Linux master uses fixed addresses and never
++   * reads it, so we simply hand back our compiled-in copy.
++   */
++
++  return (struct resource_table *)&g_rk3576_rsc_table;
++}
++
++static bool rk3576_rptun_is_autostart(struct rptun_dev_s *dev)
++{
++  return true;
++}
++
++static bool rk3576_rptun_is_master(struct rptun_dev_s *dev)
++{
++  return false;                 /* REMOTE: Linux is the virtio master */
++}
++
++static int rk3576_rptun_start(struct rptun_dev_s *dev)
++{
++  return 0;
++}
++
++static int rk3576_rptun_stop(struct rptun_dev_s *dev)
++{
++  return 0;
++}
++
++static int rk3576_rptun_notify(struct rptun_dev_s *dev, uint32_t vqid)
++{
++  /* Kick Linux: make our TX SPI pending.  GICD_ISPENDR is write-1-to-set,
++   * so this is atomic against Linux touching other bits in the same word.
++   */
++
++  __asm__ volatile("dsb sy" ::: "memory");
++  putreg32(1u << (RK3576_IRQ_RPMSG_TX % 32),
++           GICD_ISPENDR(RK3576_IRQ_RPMSG_TX));
++  return 0;
++}
++
++static int rk3576_rptun_register_callback(struct rptun_dev_s *dev,
++                                          rptun_callback_t callback,
++                                          void *arg)
++{
++  struct rk3576_rptun_dev_s *priv =
++      container_of(dev, struct rk3576_rptun_dev_s, rptun);
++
++  priv->callback = callback;
++  priv->arg      = arg;
++  return 0;
++}
++
++/****************************************************************************
++ * Name: rk3576_rptun_isr
++ *
++ * Description:
++ *   Linux -> us kick handler (INTID 172).  A single interrupt serves the
++ *   whole vdev, so notify rptun for all virtqueues.
++ *
++ ****************************************************************************/
++
++static int rk3576_rptun_isr(int irq, void *context, void *arg)
++{
++  struct rk3576_rptun_dev_s *priv = arg;
++
++  if (priv->callback != NULL)
++    {
++      priv->callback(priv->arg, RPTUN_NOTIFY_ALL);
++    }
++
++  return OK;
++}
++
++/****************************************************************************
++ * Public Functions
++ ****************************************************************************/
++
++int rk3576_rptun_init(const char *shmemname, const char *cpuname)
++{
++  struct rk3576_rptun_dev_s *dev = &g_rptun_dev;
++  int ret;
++
++  dev->rptun.ops = &g_rk3576_rptun_ops;
++  strlcpy(dev->cpuname, cpuname, sizeof(dev->cpuname));
++
++  /* Attach and enable the RX kick.  up_enable_irq() writes GICD_ISENABLER
++   * (write-1-to-set), and up_prioritize_irq() sets our priority; routing to
++   * this core is done by the board (rk3576_amp_irq_route) and re-applied by
++   * Linux from its amp-irqs table.
++   */
++
++  ret = irq_attach(RK3576_IRQ_RPMSG_RX, rk3576_rptun_isr, dev);
++  if (ret < 0)
++    {
++      return ret;
++    }
++
++  up_prioritize_irq(RK3576_IRQ_RPMSG_RX, RK3576_AMP_IRQ_PRIO_VAL);
++  up_enable_irq(RK3576_IRQ_RPMSG_RX);
++
++  ret = rptun_initialize(&dev->rptun);
++  if (ret < 0)
++    {
++      irq_detach(RK3576_IRQ_RPMSG_RX);
++    }
++
++  return ret;
++}
+diff --git a/arch/arm64/src/rk3576/rk3576_rptun.h b/arch/arm64/src/rk3576/rk3576_rptun.h
+new file mode 100644
+index 00000000000..06e3c78eef4
+--- /dev/null
++++ b/arch/arm64/src/rk3576/rk3576_rptun.h
+@@ -0,0 +1,49 @@
++/****************************************************************************
++ * arch/arm64/src/rk3576/rk3576_rptun.h
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ ****************************************************************************/
++
++#ifndef __ARCH_ARM64_SRC_RK3576_RK3576_RPTUN_H
++#define __ARCH_ARM64_SRC_RK3576_RK3576_RPTUN_H
++
++/****************************************************************************
++ * Included Files
++ ****************************************************************************/
++
++#include <nuttx/config.h>
++
++/****************************************************************************
++ * Pre-processor Definitions
++ ****************************************************************************/
++
++/* Shared-memory layout, must match the Linux rk3576-kickpi-k7-amp.dtsi */
++
++#define RK3576_AMP_VRING0_BASE    0x47800000
++#define RK3576_AMP_BUFPOOL_BASE   0x47a00000
++#define RK3576_AMP_BUFPOOL_SIZE   0x00200000
++
++/****************************************************************************
++ * Public Function Prototypes
++ ****************************************************************************/
++
++#ifndef __ASSEMBLY__
++
++#undef EXTERN
++#if defined(__cplusplus)
++#  define EXTERN extern "C"
++extern "C"
++{
++#else
++#  define EXTERN extern
++#endif
++
++int rk3576_rptun_init(const char *shmemname, const char *cpuname);
++
++#undef EXTERN
++#if defined(__cplusplus)
++}
++#endif
++
++#endif /* __ASSEMBLY__ */
++#endif /* __ARCH_ARM64_SRC_RK3576_RK3576_RPTUN_H */
+diff --git a/arch/arm64/src/rk3576/rk3576_rsctable.c b/arch/arm64/src/rk3576/rk3576_rsctable.c
+new file mode 100644
+index 00000000000..90b489cca28
+--- /dev/null
++++ b/arch/arm64/src/rk3576/rk3576_rsctable.c
+@@ -0,0 +1,120 @@
++/****************************************************************************
++ * arch/arm64/src/rk3576/rk3576_rsctable.c
++ *
++ * Static OpenAMP resource table for the RK3576 AMP slave.
++ *
++ * The Linux master (drivers/rpmsg/rockchip_rpmsg_softirq.c) uses fixed
++ * physical vring addresses and never exchanges a resource table, so we
++ * describe the exact same geometry here and expose it through rptun's
++ * get_resource op.  Everything must match the Linux side bit-for-bit:
++ *
++ *   vring0  0x47800000   (Linux rvq / our tvq)
++ *   vring1  0x47808000   (Linux svq / our rvq), stride RPMSG_VRING_SIZE
++ *   64 descriptors, 0x1000 align, 512B buffers
++ *   features: name-service announcement only (no CPUNAME private bit —
++ *             Linux virtio_rpmsg_bus does not understand it)
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ ****************************************************************************/
++
++/****************************************************************************
++ * Included Files
++ ****************************************************************************/
++
++#include <nuttx/config.h>
++
++#include <nuttx/rptun/rptun.h>
++#include <openamp/open_amp.h>
++
++#include "rk3576_rptun.h"
++
++/****************************************************************************
++ * Pre-processor Definitions
++ ****************************************************************************/
++
++#define NUM_VRINGS              0x02
++#define VRING_COUNT             64          /* RPMSG_BUF_COUNT (Linux)   */
++#define VRING_ALIGN             0x1000
++#define VDEV0_VRING_BASE        RK3576_AMP_VRING0_BASE
++#define VRING_SIZE              0x8000      /* RPMSG_VRING_SIZE (Linux)  */
++
++#define NO_RESOURCE_ENTRIES     (2)
++#define RSC_VDEV_FEATURE_NS     (1)         /* name-service announcement */
++#define RK3576_RSC_TABLE_VERSION (1)
++
++/****************************************************************************
++ * Public Data
++ ****************************************************************************/
++
++const struct rptun_rsc_s g_rk3576_rsc_table =
++{
++  .rsc_tbl_hdr =
++  {
++    RK3576_RSC_TABLE_VERSION,
++    NO_RESOURCE_ENTRIES,
++    {
++      0, 0
++    }
++  },
++
++  .offset =
++  {
++    offsetof(struct rptun_rsc_s, rpmsg_vdev),
++    offsetof(struct rptun_rsc_s, carveout)
++  },
++
++  .log_trace =
++  {
++    RSC_TRACE, 0, 0
++  },
++
++  .rpmsg_vdev =
++  {
++    RSC_VDEV,
++    VIRTIO_ID_RPMSG,        /* 7 */
++    2,                      /* notifyid */
++    RSC_VDEV_FEATURE_NS,    /* dfeatures: NS only */
++    0, 0, 0,
++    NUM_VRINGS,
++    {
++      0, 0
++    }
++  },
++
++  .rpmsg_vring0 =
++  {
++    VDEV0_VRING_BASE,
++    VRING_ALIGN,
++    VRING_COUNT,
++    0,                      /* notifyid 0 */
++    0
++  },
++
++  .rpmsg_vring1 =
++  {
++    VDEV0_VRING_BASE + VRING_SIZE,
++    VRING_ALIGN,
++    VRING_COUNT,
++    1,                      /* notifyid 1 */
++    0
++  },
++
++  .config =
++  {
++    0
++  },
++
++  /* rpmsg buffer pool (Linux allocates from its rpmsg-dma reserved region;
++   * on our side it is the fixed carve-out at RK3576_AMP_BUFPOOL_BASE).
++   */
++
++  .carveout =
++  {
++    RSC_CARVEOUT,
++    RK3576_AMP_BUFPOOL_BASE,
++    RK3576_AMP_BUFPOOL_BASE,
++    RK3576_AMP_BUFPOOL_SIZE,
++    0, 0,
++    "rpmsg_shm"
++  }
++};
