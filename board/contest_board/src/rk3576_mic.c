@@ -28,6 +28,17 @@
  *   echo MIC_START > /dev/ttyRPMSG0; timeout 5 cat /dev/ttyRPMSG0 > mic.raw
  *   aplay -f S16_LE -r <hz> -c 1 mic.raw
  *
+ * A second endpoint, "rpmsg-mic", carries the same PCM under the binary
+ * protocol in rk3576_mic_proto.h: framed, sequenced and timestamped, with
+ * the capabilities readable instead of assumed.  The Linux side of it is
+ * the snd-rpmsg-mic kernel module, which turns it into an ALSA capture
+ * card, so the microphone can be recorded with arecord like any other:
+ *
+ *   arecord -D hw:rpmsgmic,0 -f S16_LE -r 16000 -c 1 -d 5 mic.wav
+ *
+ * Both endpoints stay usable; the two sinks share one capture stream, and
+ * the hardware runs whenever either of them asks for it.
+ *
  * SPDX-License-Identifier: Apache-2.0
  ****************************************************************************/
 
@@ -39,10 +50,13 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <nuttx/kthread.h>
 #include <nuttx/rpmsg/rpmsg.h>
+
+#include <arch/board/rk3576_mic_proto.h>
 
 #ifdef CONFIG_RK3576_PDM
 #  include "rk3576_pdm.h"
@@ -82,7 +96,7 @@
  * so keep each PCM chunk comfortably below the usable payload.
  */
 
-#define MIC_CHUNK_SAMPLES   224         /* 448 bytes of 16-bit PCM */
+#define MIC_CHUNK_SAMPLES   RPMSG_MIC_CHUNK_SAMPLES  /* 448 bytes of PCM */
 
 /* The capture FIFO holds only a couple of milliseconds, far less than a
  * single rpmsg_sendto() can take.  So the capture thread does nothing but
@@ -96,11 +110,18 @@
  * Private Data
  ****************************************************************************/
 
-static struct rpmsg_endpoint g_mic_ept;
+static struct rpmsg_endpoint g_mic_ept;       /* "rpmsg-tty", text protocol */
 static bool                  g_mic_bound;
-static volatile bool         g_mic_want;      /* host asked us to stream */
-static volatile bool         g_mic_running;   /* hardware is actually on */
+static volatile bool         g_tty_want;      /* tty client asked to stream */
 static volatile uint32_t     g_mic_peer;
+
+static struct rpmsg_endpoint g_snd_ept;       /* "rpmsg-mic", ALSA protocol */
+static bool                  g_snd_bound;
+static volatile bool         g_snd_want;      /* ALSA client asked to stream */
+static volatile uint32_t     g_snd_peer;
+static volatile uint32_t     g_snd_seq;
+
+static volatile bool         g_mic_running;   /* hardware is actually on */
 static int                   g_mic_rate;
 
 static int16_t               g_mic_ring[MIC_RING_SAMPLES];
@@ -111,6 +132,110 @@ static volatile uint32_t     g_mic_dropped;
 /****************************************************************************
  * Private Functions
  ****************************************************************************/
+
+/****************************************************************************
+ * Name: mic_want
+ *
+ * Description:
+ *   The two sinks share one capture stream, so the hardware runs whenever
+ *   either of them wants data.
+ *
+ ****************************************************************************/
+
+static inline bool mic_want(void)
+{
+  return g_tty_want || g_snd_want;
+}
+
+/****************************************************************************
+ * Name: mic_now_us
+ *
+ * Description:
+ *   Slave monotonic clock in microseconds, stamped into every PCM chunk so
+ *   the host can tell a late packet from a lost one.
+ *
+ ****************************************************************************/
+
+static uint64_t mic_now_us(void)
+{
+  struct timespec ts;
+
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (uint64_t)ts.tv_sec * 1000000ull + (uint64_t)(ts.tv_nsec / 1000);
+}
+
+/****************************************************************************
+ * Name: rk3576_mic_snd_ept_cb
+ *
+ * Description:
+ *   Host -> slave commands on the binary ("rpmsg-mic") endpoint.  Same rule
+ *   as the text endpoint: only set flags here, the capture thread owns the
+ *   hardware.
+ *
+ ****************************************************************************/
+
+static int rk3576_mic_snd_ept_cb(FAR struct rpmsg_endpoint *ept,
+                                 FAR void *data, size_t len, uint32_t src,
+                                 FAR void *priv)
+{
+  FAR const struct rpmsg_mic_hdr *hdr = data;
+  struct
+  {
+    struct rpmsg_mic_hdr  hdr;
+    struct rpmsg_mic_caps caps;
+  }
+  __attribute__((packed)) rsp;
+
+  if (len < sizeof(*hdr) || hdr->magic != RPMSG_MIC_MAGIC)
+    {
+      return 0;
+    }
+
+  g_snd_peer = src;
+
+  switch (hdr->type)
+    {
+      case RPMSG_MIC_CMD_START:
+        g_snd_seq  = 0;
+        g_snd_want = true;
+        break;
+
+      case RPMSG_MIC_CMD_STOP:
+        g_snd_want = false;
+        break;
+
+      case RPMSG_MIC_CMD_CHAN:
+#ifdef CONFIG_RK3576_PDM
+        if (hdr->arg <= 1)
+          {
+            rk3576_pdm_set_channel((int)hdr->arg);
+          }
+#endif
+        break;
+
+      case RPMSG_MIC_CMD_CAPS:
+        memset(&rsp, 0, sizeof(rsp));
+        rsp.hdr.magic        = RPMSG_MIC_MAGIC;
+        rsp.hdr.type         = RPMSG_MIC_RSP_CAPS;
+        rsp.hdr.dropped      = g_mic_dropped;
+        rsp.hdr.ts_us        = mic_now_us();
+        rsp.caps.rate        = (uint32_t)(g_mic_rate > 0 ? g_mic_rate : 0);
+        rsp.caps.bits        = MIC_SAMPLE_BITS;
+        rsp.caps.channels    = MIC_CHANNELS;
+        rsp.caps.chunk_samples = MIC_CHUNK_SAMPLES;
+        rsp.caps.overruns    = mic_hw_overruns();
+#ifdef CONFIG_RK3576_PDM
+        rsp.caps.flags       = RPMSG_MIC_FLAG_PDM;
+#endif
+        rpmsg_sendto(ept, &rsp, sizeof(rsp), src);
+        break;
+
+      default:
+        break;
+    }
+
+  return 0;
+}
 
 /****************************************************************************
  * Name: rk3576_mic_ept_cb
@@ -136,11 +261,11 @@ static int rk3576_mic_ept_cb(FAR struct rpmsg_endpoint *ept, FAR void *data,
 
   if (len >= 9 && strncmp(cmd, "MIC_START", 9) == 0)
     {
-      g_mic_want = true;
+      g_tty_want = true;
     }
   else if (len >= 8 && strncmp(cmd, "MIC_STOP", 8) == 0)
     {
-      g_mic_want = false;
+      g_tty_want = false;
     }
   else if (len >= 7 && strncmp(cmd, "MIC_CH", 6) == 0 &&
            (cmd[6] == '0' || cmd[6] == '1'))
@@ -206,9 +331,9 @@ static int rk3576_mic_capture_thread(int argc, FAR char *argv[])
       size_t got;
       size_t i;
 
-      if (g_mic_want != g_mic_running)
+      if (mic_want() != g_mic_running)
         {
-          if (g_mic_want)
+          if (mic_want())
             {
               g_mic_head = g_mic_tail = 0;
               mic_hw_start();
@@ -218,7 +343,7 @@ static int rk3576_mic_capture_thread(int argc, FAR char *argv[])
               mic_hw_stop();
             }
 
-          g_mic_running = g_mic_want;
+          g_mic_running = mic_want();
         }
 
       if (!g_mic_running)
@@ -256,13 +381,22 @@ static int rk3576_mic_capture_thread(int argc, FAR char *argv[])
 
 static int rk3576_mic_send_thread(int argc, FAR char *argv[])
 {
-  static int16_t chunk[MIC_CHUNK_SAMPLES];
+  /* The PCM sits behind the header in one buffer, so the binary path can
+   * hand rpmsg a single framed packet without a second copy.
+   */
+
+  static struct
+  {
+    struct rpmsg_mic_hdr hdr;
+    int16_t              pcm[MIC_CHUNK_SAMPLES];
+  }
+  __attribute__((packed)) pkt;
 
   for (; ; )
     {
       size_t n = 0;
 
-      if (!g_mic_running || !g_mic_bound)
+      if (!g_mic_running || (!g_mic_bound && !g_snd_bound))
         {
           usleep(20 * 1000);
           continue;
@@ -270,7 +404,7 @@ static int rk3576_mic_send_thread(int argc, FAR char *argv[])
 
       while (n < MIC_CHUNK_SAMPLES && g_mic_tail != g_mic_head)
         {
-          chunk[n++] = g_mic_ring[g_mic_tail];
+          pkt.pcm[n++] = g_mic_ring[g_mic_tail];
           g_mic_tail = (g_mic_tail + 1) % MIC_RING_SAMPLES;
         }
 
@@ -280,7 +414,23 @@ static int rk3576_mic_send_thread(int argc, FAR char *argv[])
           continue;
         }
 
-      rpmsg_sendto(&g_mic_ept, chunk, n * sizeof(int16_t), g_mic_peer);
+      if (g_snd_want && g_snd_bound)
+        {
+          pkt.hdr.magic   = RPMSG_MIC_MAGIC;
+          pkt.hdr.type    = RPMSG_MIC_RSP_DATA;
+          pkt.hdr.arg     = 0;
+          pkt.hdr.seq     = g_snd_seq++;
+          pkt.hdr.dropped = g_mic_dropped;
+          pkt.hdr.ts_us   = mic_now_us();
+
+          rpmsg_sendto(&g_snd_ept, &pkt,
+                       sizeof(pkt.hdr) + n * sizeof(int16_t), g_snd_peer);
+        }
+
+      if (g_tty_want && g_mic_bound)
+        {
+          rpmsg_sendto(&g_mic_ept, pkt.pcm, n * sizeof(int16_t), g_mic_peer);
+        }
     }
 
   return 0;
@@ -299,6 +449,11 @@ static void rk3576_mic_device_created(FAR struct rpmsg_device *rdev,
                        RPMSG_ADDR_ANY, RPMSG_ADDR_ANY,
                        rk3576_mic_ept_cb, NULL);
       g_mic_bound = true;
+
+      rpmsg_create_ept(&g_snd_ept, rdev, RPMSG_MIC_EPT_NAME,
+                       RPMSG_ADDR_ANY, RPMSG_ADDR_ANY,
+                       rk3576_mic_snd_ept_cb, NULL);
+      g_snd_bound = true;
     }
 }
 
@@ -308,8 +463,12 @@ static void rk3576_mic_device_destroy(FAR struct rpmsg_device *rdev,
   if (strcmp("linux", rpmsg_get_cpuname(rdev)) == 0)
     {
       g_mic_bound = false;
-      g_mic_want  = false;
+      g_tty_want  = false;
       rpmsg_destroy_ept(&g_mic_ept);
+
+      g_snd_bound = false;
+      g_snd_want  = false;
+      rpmsg_destroy_ept(&g_snd_ept);
     }
 }
 
