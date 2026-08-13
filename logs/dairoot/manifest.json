@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "team_id": "contest2026_290_dairoot",
+  "github_login": "dairoot",
+  "generator": "claude-code-collector@1.3.0",
+  "sessions": [
+    {
+      "session_id": "946a5a2b-b687-49d5-8142-9b5728174c11",
+      "tool": "claude-code",
+      "started_at": "2026-08-10T15:57:23.387Z",
+      "last_event_at": "2026-08-11T12:38:06.675Z",
+      "event_count": 735,
+      "raw_event_count": 1739,
+      "file_path": "logs/dairoot/2026-08-10/claude-code__946a5a2b-b687-49d5-8142-9b5728174c11.jsonl",
+      "collection_mode": "cli",
+      "health": "ok",
+      "model": "claude-fable-5"
+    },
+    {
+      "session_id": "aea7603e-b105-40c8-a35e-030a6cd66834",
+      "tool": "claude-code",
+      "started_at": "2026-08-10T15:57:23.387Z",
+      "last_event_at": "2026-08-12T16:53:12.525Z",
+      "event_count": 2363,
+      "raw_event_count": 4434,
+      "file_path": "logs/dairoot/2026-08-10/claude-code__aea7603e-b105-40c8-a35e-030a6cd66834.jsonl",
+      "collection_mode": "cli",
+      "health": "ok",
+      "model": "<synthetic>"
+    },
+    {
+      "session_id": "17f63553-038c-4a7f-a62b-5e0d227a6dc0",
+      "tool": "claude-code",
+      "started_at": "2026-08-12T17:02:48.985Z",
+      "last_event_at": "2026-08-12T17:31:42.505Z",
+      "event_count": 197,
+      "raw_event_count": 370,
+      "file_path": "logs/dairoot/2026-08-12/claude-code__17f63553-038c-4a7f-a62b-5e0d227a6dc0.jsonl",
+      "collection_mode": "cli",
+      "health": "ok",
+      "model": "claude-opus-5"
+    },
+    {
+      "session_id": "f234b14a-8089-4fe3-b2a2-502ae2a87d9f",
+      "tool": "claude-code",
+      "started_at": "2026-08-12T17:17:27.327Z",
+      "last_event_at": "2026-08-12T17:28:14.142Z",
+      "event_count": 30,
+      "raw_event_count": 69,
+      "file_path": "logs/dairoot/2026-08-12/claude-code__f234b14a-8089-4fe3-b2a2-502ae2a87d9f.jsonl",
+      "collection_mode": "cli",
+      "health": "ok",
+      "model": "claude-opus-5"
+    },
+    {
+      "session_id": "5cf0e324-3233-4f72-9c45-8fea7c084769",
+      "tool": "claude-code",
+      "started_at": "2026-08-13T05:00:46.088Z",
+      "last_event_at": "2026-08-13T14:16:37.264Z",
+      "event_count": 540,
+      "raw_event_count": 1041,
+      "file_path": "logs/dairoot/2026-08-13/claude-code__5cf0e324-3233-4f72-9c45-8fea7c084769.jsonl",
+      "collection_mode": "cli",
+      "health": "ok",
+      "model": "claude-opus-5"
+    }
+  ],
+  "updated_at": "2026-08-13T16:47:44.466688+00:00"
+}

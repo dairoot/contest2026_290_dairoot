@@ -24,3 +24,11 @@ board/contest_board/src/*.o
 board/contest_board/src/*.a
 board/contest_board/src/.depend
 board/contest_board/src/Make.dep
+
+# out-of-tree kernel module build artifacts
+board/contest_board/linux-side/snd-rpmsg-mic/*.ko
+board/contest_board/linux-side/snd-rpmsg-mic/*.mod
+board/contest_board/linux-side/snd-rpmsg-mic/*.mod.c
+board/contest_board/linux-side/snd-rpmsg-mic/modules.order
+board/contest_board/linux-side/snd-rpmsg-mic/Module.symvers
+board/contest_board/linux-side/snd-rpmsg-mic/.*.cmd
