@@ -75,7 +75,19 @@
       "collection_mode": "cli",
       "health": "ok",
       "model": "claude-fable-5"
+    },
+    {
+      "session_id": "39ef8f7c-747b-4876-9a92-56633f70797c",
+      "tool": "claude-code",
+      "started_at": "2026-08-14T16:53:39.132Z",
+      "last_event_at": "2026-08-14T18:58:47.262Z",
+      "event_count": 1113,
+      "raw_event_count": 1113,
+      "file_path": "logs/dairoot/2026-08-15/claude-code__39ef8f7c-747b-4876-9a92-56633f70797c.jsonl",
+      "collection_mode": "cli",
+      "health": "ok",
+      "model": "claude-fable-5"
     }
   ],
-  "updated_at": "2026-08-13T16:47:44.466688+00:00"
+  "updated_at": "2026-08-14T18:59:04.145573+00:00"
 }

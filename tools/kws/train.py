@@ -21,8 +21,12 @@ ROOT = Path(__file__).parent
 DATA = ROOT / "data"
 CKPT = ROOT / "checkpoints"
 
-# Frozen architecture — kws_nn.c implements exactly this
-ARCH = dict(ch=48, blocks=3, conv1_k=(10, 4), conv1_s=(2, 2),
+# Frozen architecture — kws_nn.c implements exactly this (all dims flow
+# through the generated headers).  ch 48->56: +36% capacity, ~70 ms/inference
+# on the A53 (80 ms budget); with SpecAugment it lifted held-out streaming
+# recall 64%->87% at the zero-false-alarm threshold region (2026-08-15,
+# TTS-only corpus, 2 seeds).  Width alone (no SpecAugment) did NOT help.
+ARCH = dict(ch=56, blocks=3, conv1_k=(10, 4), conv1_s=(2, 2),
             conv1_p=(4, 1), t=K.T_FRAMES, m=K.NMEL)
 
 EPOCHS = 40
@@ -30,6 +34,7 @@ BATCH = 128
 LR = 1e-3
 PATIENCE = 7
 SEED = 20260814
+DEV = "mps" if torch.backends.mps.is_available() else "cpu"
 
 
 class DSCNN(nn.Module):
@@ -78,13 +83,35 @@ def load_data():
     return mk(~val, True), mk(val, False), n
 
 
+def specaugment(x, n_t=2, w_t=25, n_f=2, w_f=7):
+    """Train-time masking: zero random time/freq stripes, in place.
+
+    Features are per-window CMN'd (zero-mean), so zero fill is neutral.
+    The window-level val metrics get slightly WORSE with this on, but
+    whole-clip streaming recall at high thresholds improves a lot — the
+    score distribution on positives saturates high instead of dipping
+    mid-phrase.
+    """
+    b = x.shape[0]
+    ar_t = torch.arange(x.shape[2])[None, :]
+    ar_f = torch.arange(x.shape[3])[None, :]
+    for _ in range(n_t):
+        w = torch.randint(0, w_t + 1, (b, 1))
+        s = torch.randint(0, x.shape[2], (b, 1))
+        x.masked_fill_(((ar_t >= s) & (ar_t < s + w))[:, None, :, None], 0.0)
+    for _ in range(n_f):
+        w = torch.randint(0, w_f + 1, (b, 1))
+        s = torch.randint(0, x.shape[3], (b, 1))
+        x.masked_fill_(((ar_f >= s) & (ar_f < s + w))[:, None, None, :], 0.0)
+
+
 @torch.no_grad()
 def evaluate(model, loader):
     model.eval()
     probs, ys = [], []
     for xb, yb in loader:
-        p = torch.softmax(model(xb), dim=1)[:, 1]
-        probs.append(p)
+        p = torch.softmax(model(xb.to(DEV)), dim=1)[:, 1]
+        probs.append(p.cpu())
         ys.append(yb)
     return torch.cat(probs).numpy(), torch.cat(ys).numpy()
 
@@ -102,9 +129,9 @@ def main():
     torch.manual_seed(SEED)
     CKPT.mkdir(exist_ok=True)
     train_loader, val_loader, norm = load_data()
-    model = DSCNN()
+    model = DSCNN().to(DEV)
     nparam = sum(p.numel() for p in model.parameters())
-    print(f"params: {nparam}")
+    print(f"params: {nparam}  dev: {DEV}")
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, EPOCHS)
     lossf = nn.CrossEntropyLoss()
@@ -114,8 +141,9 @@ def main():
         model.train()
         tot, cnt = 0.0, 0
         for xb, yb in train_loader:
+            specaugment(xb)
             opt.zero_grad()
-            loss = lossf(model(xb), yb)
+            loss = lossf(model(xb.to(DEV)), yb.to(DEV))
             loss.backward()
             opt.step()
             tot += loss.item() * len(yb)
@@ -140,6 +168,7 @@ def main():
 
     model.load_state_dict(best_state)
     probs, ys = evaluate(model, val_loader)
+    model = model.cpu()
     rows = sweep(probs, ys)
     print(" thr    FRR      FPR")
     for th, frr, fpr in rows:
