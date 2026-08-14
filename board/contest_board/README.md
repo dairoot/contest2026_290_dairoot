@@ -252,6 +252,45 @@ PDM 那条路的实测（未接麦克风）：31846 B/s（理论 32000），`ovr
 `ovr=0`，但连续大音量采集时观察到过 `ovr` 增长（单样本级丢失）。彻底解决需要
 PL330 DMA，而三个 DMAC 都归 Linux。
 
+### 6. 离线唤醒词「你好，openvela」（`CONFIG_RK3576_KWS`，默认开）
+
+openvela 开源版没有可用的离线唤醒引擎（media_trigger 框架的模型接口
+`media_trigger_model.h` 全树无实现），本作品自研了一个并常驻 cpu3：
+
+- **引擎**：400/160 滑窗 → 512 点 FFT → 40 mel → 归一化 → 200×40 特征窗
+  （2.0s，覆盖「你好，openvela」连逗号停顿平均 1.65s 的完整时长）
+  → ~1.1 万参数 DS-CNN（纯 C float32，仅依赖 libm），每 80ms 推理一次，
+  最近 2 次平滑过阈值即检出，2s 不应期。权重由 `tools/kws/` 管线训练导出
+  （edge-tts 多音色合成 + 板载真实房噪增强 + 截断/近音/音调硬负例），
+  C 实现与 Python 训练前端**同源查表 + 板上金标准对拍**（|Δprob|<1e-7）。
+- **数据通路**：采集线程把每个 burst 先喂给 KWS 私有环（0.5s），Linux 不在
+  录音时发送环不再空转；KWS 线程（优先级 90）消费推理，单次推理数 ms
+  （`KWS_INFO` 的 `us` 字段是实测值）。
+- **事件上报**：检出后经 `rpmsg-mic` 端点发 `RPMSG_MIC_EVT_WAKE`
+  （arg=概率‰，seq=累计次数），`snd_rpmsg_mic.ko` 转成 `openvela-kws`
+  input 设备的 `KEY_WAKEUP` 事件并打 dmesg；tty 端点空闲时同发一行
+  `EVT WAKE p=0.9xx`。Linux 侧演示脚本 `tools/kws/deploy/wake_watch.py`
+  可挂任意命令（放提示音 / 启动 ASR）。板上已装 `kws-wakesound.service`
+  开机自启：唤醒成功经喇叭放「叮咚」双音（`deploy/make_ding.py` 合成；
+  纯音调类声音，模型经音调硬负例训练对其免疫，实测回灌不自触发）。
+- **运行期控制**（tty 端点文本命令）：`KWS_INFO`（状态/计数/耗时）、
+  `KWS_ON`/`KWS_OFF`、`KWS_THR <500-999>`（阈值‰）、`KWS_SCORE`
+  （每秒分数流，用于现场校准）、`KWS_RESET`；诊断：`KWS_TEST`（全零/全一
+  特征过网络，与主机对拍器输出逐微比对，可判定目标机数值是否损坏）、
+  `KWS_PEEK`（引擎实际收到的 PCM 峰值 + 最新特征帧抽样，可判定喂数链路）。
+- **三个已踩过的坑**（都已修复/自愈）：①麦克风 VDD 借 GPIO3_D0 当 1.8V 电源，
+  **重启即断电**——已装 systemd 单元 `kws-micpower.service` 开机拉高；②本核
+  先于 Linux 启动，PDM 时钟/引脚配置会被 Linux 启动过程覆盖——`pdm_start()`
+  现在每次启动前重断言 CRU/IOC（nuttx 侧补丁），且常听改为 rpmsg 链路建立后
+  才开启；③采集线程带 5 秒全零看门狗，输入死寂自动重初始化。
+- **验收**：对板说「你好，openvela」（或 `aplay` 播放
+  `tools/kws/data/pos_raw/` 任一正样本经喇叭给麦克风听），然后
+  `dmesg | tail` 应有 `wake word detected: p=0.9xx`，`KWS_INFO` 的 `det`
+  计数 +1，`wake_watch.py` 收到 `KEY_WAKEUP`。
+
+指标（TTS 整句流式评测，板上实测，阈值见 `tools/kws/checkpoints/config.json`）
+与训练复现全流程见 [`tools/kws/README.md`](../../tools/kws/README.md)。
+
 ## 四、实现历程与关键难点
 
 “Linux 持有 GIC distributor + openvela 作为同构 A 核 slave”在 NuttX/openvela

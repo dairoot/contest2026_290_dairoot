@@ -18,6 +18,7 @@
  */
 
 #include <linux/completion.h>
+#include <linux/input.h>
 #include <linux/module.h>
 #include <linux/rpmsg.h>
 #include <linux/slab.h>
@@ -67,6 +68,10 @@ struct rpmsg_mic {
 	u16 pending_cmd;
 
 	unsigned int chan;		/* PDM data slot, 0 or 1 */
+
+	/* Wake-word events from the slave's on-core KWS engine. */
+	struct input_dev *input;
+	u32 wake_count;
 };
 
 /*
@@ -191,6 +196,24 @@ static int rpmsg_mic_cb(struct rpmsg_device *rpdev, void *data, int len,
 	case RPMSG_MIC_RSP_DATA:
 		rpmsg_mic_push(mic, hdr, (const u8 *)data + sizeof(*hdr),
 			       len - sizeof(*hdr));
+		break;
+
+	case RPMSG_MIC_EVT_WAKE:
+		/*
+		 * The slave's offline wake-word engine heard the phrase.
+		 * Surface it as a KEY_WAKEUP press so userspace can react
+		 * with plain input APIs (evtest, libinput, ...).
+		 */
+		mic->wake_count++;
+		dev_info(&rpdev->dev,
+			 "wake word detected: p=0.%03u #%u (slave ts %llu us)\n",
+			 hdr->arg, hdr->seq, hdr->ts_us);
+		if (mic->input) {
+			input_report_key(mic->input, KEY_WAKEUP, 1);
+			input_sync(mic->input);
+			input_report_key(mic->input, KEY_WAKEUP, 0);
+			input_sync(mic->input);
+		}
 		break;
 
 	default:
@@ -491,6 +514,24 @@ static int rpmsg_mic_probe(struct rpmsg_device *rpdev)
 				  snd_ctl_new1(&rpmsg_mic_controls[i], mic));
 		if (ret < 0)
 			goto err;
+	}
+
+	/*
+	 * Wake-word event channel.  Optional: losing it degrades to dmesg
+	 * lines only, so a failure here does not fail the probe.
+	 */
+	mic->input = devm_input_allocate_device(&rpdev->dev);
+	if (mic->input) {
+		mic->input->name = "openvela-kws";
+		mic->input->phys = "rpmsg-mic/kws";
+		mic->input->id.bustype = BUS_VIRTUAL;
+		input_set_capability(mic->input, EV_KEY, KEY_WAKEUP);
+		ret = input_register_device(mic->input);
+		if (ret) {
+			dev_warn(&rpdev->dev,
+				 "kws input device failed: %d\n", ret);
+			mic->input = NULL;
+		}
 	}
 
 	strscpy(card->driver, DRV_NAME, sizeof(card->driver));

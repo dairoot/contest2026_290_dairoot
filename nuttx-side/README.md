@@ -8,7 +8,7 @@
 - 基线：`openvela/nuttx` 的 `dev-ai-contest-2026` 分支，commit
   **`dd92bcf4257`**（"drivers/lcd/lcd_dev: Add poll support"）——即
   `openvela.xml` 中 `nuttx` project 所指向的版本
-- 共 5 个提交、21 个文件、2235 行新增
+- 共 6 个提交、21 个文件、2261 行新增
 - 已验证：在上述基线上 `git am` 全部应用成功，产出的 tree 与开发机上的
   工作树完全一致（`c1199896`）
 
@@ -33,6 +33,7 @@ cd ..
 | 0003 | 去掉调试桩，定稿 AMP-slave 芯片层与 rptun |
 | 0004 | `rk3576_pdm.c` / `rk3576_sai.c`：PDM（v2 IP）与 SAI 麦克风采集前端 |
 | 0005 | 修正 IOMUX 上下拉编码 |
+| 0006 | PDM 每次启动前重断言 CRU 时钟/IOC 引脚：Linux 启动会重挂共享时钟树并 gate「无人使用」的时钟（含喂给麦克风的 clk_pdm1_out），控制器照常运转但数据线死寂，故障完全无声 |
 
 ## 与主线的关系
 

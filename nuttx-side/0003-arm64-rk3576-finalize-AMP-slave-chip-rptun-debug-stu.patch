@@ -1,7 +1,7 @@
 From 8d341596115f92338c913251f9ecdefcadda8ad1 Mon Sep 17 00:00:00 2001
 From: dai <dai623815825@gmail.com>
 Date: Wed, 12 Aug 2026 11:15:18 +0800
-Subject: [PATCH 3/5] arm64/rk3576: finalize AMP-slave chip + rptun (debug
+Subject: [PATCH 3/6] arm64/rk3576: finalize AMP-slave chip + rptun (debug
  stubs removed)
 
 Clean version verified on KickPi K7: openvela on cpu3, heartbeat v3 at
@@ -126,3 +126,6 @@ index 90b489cca28..f2a3742986b 100644
    },
  
    /* rpmsg buffer pool (Linux allocates from its rpmsg-dma reserved region;
+-- 
+2.34.1
+

@@ -66,6 +66,15 @@
 #define RPMSG_MIC_RSP_CAPS      0x81
 #define RPMSG_MIC_RSP_DATA      0x82
 
+/* Unsolicited slave -> host event: the on-core wake-word engine detected
+ * the wake phrase.  Header only, no payload:
+ *   hdr.arg = smoothed probability in 1/1000 (0..999)
+ *   hdr.seq = cumulative detection count
+ *   hdr.ts_us = slave clock at detection
+ */
+
+#define RPMSG_MIC_EVT_WAKE      0x83
+
 /* caps.flags */
 
 #define RPMSG_MIC_FLAG_PDM      (1u << 0) /* CMD_CHAN is meaningful */

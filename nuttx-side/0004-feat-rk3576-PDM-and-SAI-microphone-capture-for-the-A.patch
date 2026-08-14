@@ -1,7 +1,7 @@
 From dad45e930780cf06d0c850e07cdb3651f2da3b99 Mon Sep 17 00:00:00 2001
 From: dai <dai623815825@gmail.com>
 Date: Wed, 12 Aug 2026 15:58:34 +0800
-Subject: [PATCH 4/5] feat(rk3576): PDM and SAI microphone capture for the AMP
+Subject: [PATCH 4/6] feat(rk3576): PDM and SAI microphone capture for the AMP
  slave
 
 Give the openvela slave its own microphone front end so it can capture
@@ -1514,3 +1514,6 @@ index 00000000000..584b5e28524
 +
 +#endif /* __ASSEMBLY__ */
 +#endif /* __ARCH_ARM64_SRC_RK3576_RK3576_SOC_H */
+-- 
+2.34.1
+
