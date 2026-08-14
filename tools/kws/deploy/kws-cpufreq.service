@@ -1,0 +1,16 @@
+[Unit]
+Description=Pin little-cluster min freq for cpu3 KWS real-time budget
+# cpu3 (openvela) shares the A53 cluster PLL with Linux cpu0-2.  With the
+# default schedutil floor (1.416 GHz at idle) one ch56 inference takes
+# 123 ms > the 80 ms cadence and the engine drops ~30% of audio; at
+# >=1.8 GHz it takes 66 ms and keeps up with zero drops.  Idle is the
+# primary state for an always-listening wake word, so pin the floor.
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo 1800000 > /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

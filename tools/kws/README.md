@@ -24,12 +24,14 @@ PDM 麦克风 ──> cpu3 openvela                                Linux (7 核)
 | `kws_common.py` | **前端数值唯一真源**（帧长/FFT/mel/归一化定义） |
 | `gen_data.py` | edge-tts 多音色合成语料（321 正 / 264 负句） |
 | `augment_and_cache.py` | 变速/加噪/混响/截断硬负例/音调硬负例 → 特征缓存 |
-| `train.py` | DS-CNN 训练（按源片段分组防泄漏切分，早停） |
+| `train.py` | DS-CNN 训练（分组防泄漏切分、SpecAugment、早停；MPS/CPU 自动） |
+| `mk_manifest_rerec.py` | 从 manifest.json 推导 data/rerec/ 的 manifest_rerec.json |
 | `export_c.py` | 折叠 BN，产出 `kws_tables.h` / `kws_model_data.h` / 金标准向量 |
 | `host/` | 主机/板上评测器：与 Python 逐帧对拍、整句流式批量评测 |
 | `deploy/flash_amp.sh` | nuttx.bin → amp.img → dd 刷板（≈10s 迭代） |
 | `deploy/wake_watch.py` | Linux 侧演示：监听 KEY_WAKEUP，可挂任意命令 |
 | `deploy/make_ding.py` + `kws-wakesound.service` | 唤醒「叮咚」反馈音（合成 + 开机自启服务，板上已装） |
+| `deploy/kws-cpufreq.service` | 小核簇 min freq 1.8GHz（DVFS 会拖垮实时预算，板上已装） |
 | `data/` `checkpoints/` | 语料与模型产物（gitignore，可全量重建） |
 
 固件侧引擎源码在 `board/contest_board/src/`：`kws_frontend.c`（FFT+mel）、
@@ -60,8 +62,9 @@ scp <板>:/tmp/n.wav data/room.wav   # 再按 60s 切成 data/noise_raw/room_*.w
 tar cf - --transform 's|.*/||' data/pos_raw/*.wav data/neg_raw/*.wav \
   | ssh <板> 'mkdir -p ~/rerec_src && tar xf - -C ~/rerec_src'
 scp rerecord_on_board.py <板>:~/ && ssh <板> 'nohup python3 ~/rerecord_on_board.py > ~/rerec.log 2>&1 &'
-# 完成（rerec.log 出现 DONE）后收回并生成 manifest_rerec.json（augment 自动合并）：
-ssh <板> 'tar cf - -C ~/rerec_out .' | tar xf - -C data/rerec/
+# 完成（rerec.log 出现 DONE）后收回，生成 manifest_rerec.json（augment 自动合并）：
+mkdir -p data/rerec && ssh <板> 'tar cf - -C ~/rerec_out .' | tar xf - -C data/rerec/
+python3 mk_manifest_rerec.py
 
 # 2) 增强 + 特征缓存（~4 分钟，≈4900 个 2.0s 窗）
 python3 augment_and_cache.py
@@ -104,25 +107,32 @@ echo KWS_OFF   > /dev/ttyRPMSG0 / KWS_ON                   # 关/开常听
 `openvela-kws` input 设备的 `KEY_WAKEUP`、以及 tty 端点的 `EVT WAKE` 文本行
 （仅当 tty 未被用作 PCM 流时）。
 
-## 当前指标（交付版：CMN + 信道自适应模型，KickPi K7 板上实测）
+## 当前指标（v6：ch56 + SpecAugment + 信道自适应，KickPi K7 板上实测）
 
-- **数值对拍**：C 引擎 vs torch/numpy，`|Δfeat| < 7e-5`、`|Δprob| < 3e-6`
-  （aarch64 实机，-O3 -ffast-math 编译）
-- **真实声学信道整句流式**（语料经板载扬声器→空气→PDM 麦重录后全速流放）：
-  θ=0.85 → 召回 89.4% / 负句误触发 4.7%；θ=0.95 → 78.5% / 1.6%；
-  出厂阈值 0.90（`KWS_THR` 可运行期调整）
-- **推理开销**：单次 53ms @ 2.0GHz A53（80ms 周期，约 60% 单核占用）
-- 口径说明：评测句子的增强变体参与过训练，绝对数字偏乐观；对完全陌生
-  说话人的表现见上方 TODO 的提升路径。历史教训（纯 TTS 训练在真信道上
-  召回为 0、无 CMN 时误报 67%）详见设计要点。
+- **数值对拍**：C 引擎 vs torch/numpy，`|Δfeat| < 4e-5`、`|Δprob| < 3e-7`
+  （aarch64 实机，-O3 -ffast-math 编译，3/3 PASS）
+- **真实声学信道整句流式（held-out）**：43 正/90 负句按组哈希与训练严格
+  隔离，语料经板载扬声器→空气→PDM 麦重录后全速流放：θ=0.85 → 召回
+  90.7% / 误触 3.3%；θ=0.90 → 88.4% / 1.1%；θ=0.95 → 86.0% / 0%；
+  出厂阈值 0.90（`KWS_THR` 可运行期调整）。同口径旧 recipe（ch48 无
+  SpecAugment）θ=0.95 仅 67.4%/1.1%。
+- **推理开销**：cpu3 实测 66ms @ 2.0GHz（`KWS_INFO` 的 us 字段）。注意
+  cpu3 与 Linux 小核同簇同 PLL：schedutil 空闲降到 1.416GHz 时单次涨到
+  123ms > 80ms 周期，引擎丢 ~30% 音频（`drop` 计数持续增长）。
+  `deploy/kws-cpufreq.service`（板上已装并 enable）把小核簇 min freq 钉在
+  1.8GHz，空闲态 66ms 稳定零丢帧——常听场景空闲即主态，此服务是必需品。
+- v5 交付版口径（全集评测，训练见过其增强变体，偏乐观）：θ=0.85 →
+  89.4%/4.7%。历史教训（纯 TTS 训练真信道召回≈0、无 CMN 误报 67%）
+  详见设计要点。
 
 ## 设计要点
 
 - **数值一致性是硬约束**：C 与 Python 前端同为 float32、同一套查表
   （Hann/旋转因子/mel 权重/归一化均由 `export_c.py` 从 `kws_common.py`
   生成），金标准测试卡 5e-3/2e-3 容差，改任何常量必须重训重导出。
-- **判决链路**：120ms 一次推理 → 最近 3 次平均 → 阈值 → 2s 不应期；
-  阈值出厂值来自训练时的验证集扫描（`checkpoints/config.json`）。
+- **判决链路**：80ms 一次推理 → 最近 3 次平均 → 阈值 → 2s 不应期
+  （常量见 kws.h，120ms×3 曾实测拖垮召回）；阈值出厂值来自训练时的
+  验证集扫描（`checkpoints/config.json`）。
 - **硬负例**：截断唤醒词（防半句触发）、「你好」系近音句、纯音/扫频/
   警报（防音调误触发）、真实房噪床。
 - **算力/内存**（cpu3 A53 实测）：单次推理数 ms 级（`KWS_INFO` 的 `us`
@@ -141,10 +151,17 @@ echo KWS_OFF   > /dev/ttyRPMSG0 / KWS_ON                   # 关/开常听
 当前板上真信道实测：θ=0.85 → 召回 89.4% / 误报 4.7%；θ=0.95 → 78.5% / 1.6%；
 出厂 θ=0.90。备好的提升路径（按性价比排序）：
 
-1. **均衡信道负例重训**：`data/rerec/` 已含 321 正 + 768 负全量真信道语料，
-   round-9 特征缓存（12565 窗）已生成——直接 `python3 train.py` 即可。
+1. ~~均衡信道负例重训~~ **完成（v6，2026-08-15）**：全量 rerec（321 正 +
+   768 负）已经 ubt 跳板从板上收回参训，缓存 12564 窗（与 round-9 的
+   12565 仅差 1）。附带验证：edge-tts 重合成语料与当年播放原件 xcorr
+   ≥0.998，正样本切割可靠。产物见 `models/nihao_openvela_v6/`，板端头
+   文件已更新——编固件+刷板即生效。
 2. **真人样本**：录若干真人「你好，openvela」（近/远场、快/慢），命名进
    `data/rerec/` 并补 `manifest_rerec.json` 条目即可参训。
-3. **模型加宽** ch 48→56：容量 +36%，推理约 53→70ms（80ms 周期内仍够）。
+3. ~~模型加宽 ch 48→56~~ **已并入默认 recipe**（2026-08-15）：train.py 现为
+   ch=56 + SpecAugment（14058 参数）。全量数据 2×2 消融：只加 SpecAugment
+   不加宽跨 seed 方差极大（held-out 真信道 @0.85 召回 93%→79%），只加宽
+   不加 SpecAugment 校准崩坏（误触 16/90）；两者组合两个 seed 都稳。推理
+   耗时已板上复核（19.9ms Linux 侧，折算 cpu3 ≈69ms < 80ms 周期）。
 4. **PDM 硬件增益**：驱动 CIC scale 可再抬，改善入口信噪比。
 5. **现场校准**：`KWS_SCORE` 流实测环境分数分布后用 `KWS_THR` 定档。
