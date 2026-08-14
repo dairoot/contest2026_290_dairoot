@@ -1,7 +1,7 @@
 From 42d93e03c21257b8f47b4b310ed4ec98d6a65492 Mon Sep 17 00:00:00 2001
 From: dai <dai623815825@gmail.com>
 Date: Tue, 11 Aug 2026 22:39:04 +0800
-Subject: [PATCH 1/5] arm64: add Rockchip RK3576 chip + GICv2 AMP-slave support
+Subject: [PATCH 1/6] arm64: add Rockchip RK3576 chip + GICv2 AMP-slave support
 
 - New chip layer arch/arm64/src/rk3576 (+ include/rk3576): Cortex-A53
   AMP slave running at 0x41800000 alongside Linux on KickPi K7; MMU maps
@@ -488,3 +488,6 @@ index 00000000000..763c6eb3b39
 +}
 +
 +#endif /* CONFIG_16550_UART */
+-- 
+2.34.1
+

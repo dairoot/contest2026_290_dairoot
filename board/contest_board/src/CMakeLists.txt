@@ -15,4 +15,8 @@ if(CONFIG_RK3576_AMP_HEARTBEAT)
   list(APPEND SRCS rk3576_heartbeat.c)
 endif()
 
+if(CONFIG_RK3576_KWS)
+  list(APPEND SRCS kws_frontend.c kws_nn.c kws_engine.c rk3576_kws.c)
+endif()
+
 target_sources(board PRIVATE ${SRCS})

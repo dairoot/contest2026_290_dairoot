@@ -1,7 +1,7 @@
 From 71fb363ecc2a74b6d925a7e5b195498bd0f58eb4 Mon Sep 17 00:00:00 2001
 From: dai <dai623815825@gmail.com>
 Date: Tue, 11 Aug 2026 23:41:29 +0800
-Subject: [PATCH 2/5] arm64/rk3576: add rptun/RPMsg AMP-slave backend
+Subject: [PATCH 2/6] arm64/rk3576: add rptun/RPMsg AMP-slave backend
 
 Static resource table + rptun ops for the RK3576 AMP slave talking to the
 Linux master (rockchip_rpmsg_softirq). REMOTE role, fixed vrings at
@@ -509,3 +509,6 @@ index 00000000000..90b489cca28
 +    "rpmsg_shm"
 +  }
 +};
+-- 
+2.34.1
+

@@ -1,7 +1,7 @@
 From 70f785b61dd6c47ddb2384f4942e00a7b79f90b4 Mon Sep 17 00:00:00 2001
 From: dai <dai623815825@gmail.com>
 Date: Wed, 12 Aug 2026 21:05:02 +0800
-Subject: [PATCH 5/5] fix(rk3576): correct the pull-up/pull-down encoding
+Subject: [PATCH 5/6] fix(rk3576): correct the pull-up/pull-down encoding
 
 RK3576 does not use the usual Rockchip pull encoding.  Every bank is
 declared PULL_TYPE_IO_1 in pinctrl-rockchip.c, and that row of
@@ -43,3 +43,6 @@ index 584b5e28524..34c8ddb94aa 100644
  
  /****************************************************************************
   * Public Function Prototypes
+-- 
+2.34.1
+

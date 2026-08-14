@@ -13,6 +13,20 @@ config ARCH_BOARD_CONTEST2026_290_BOARD_TAG
 	string "Board tag"
 	default "contest2026_290_board"
 
+config RK3576_KWS
+	bool "Offline wake-word engine (ni hao, openvela)"
+	default y
+	depends on RK3576_PDM || RK3576_SAI
+	---help---
+		Always-on keyword spotting on this core: 40-dim log-mel front end
+		plus a ~10k-parameter DS-CNN (float32, pure C, no runtime deps
+		beyond libm).  Trained offline by tools/kws/ in the contest repo;
+		weights are compiled in (kws_model_data.h).  On detection the
+		slave sends RPMSG_MIC_EVT_WAKE on the "rpmsg-mic" endpoint and a
+		text "EVT WAKE" line on "rpmsg-tty".  Control at runtime with
+		KWS_INFO / KWS_ON / KWS_OFF / KWS_THR / KWS_SCORE over the tty
+		endpoint.
+
 config RK3576_AMP_HEARTBEAT
 	bool "AMP heartbeat + defensive IRQ re-enable thread"
 	default y

@@ -64,6 +64,10 @@
 #  include "rk3576_sai.h"
 #endif
 
+#ifdef CONFIG_RK3576_KWS
+#  include "rk3576_kws.h"
+#endif
+
 /****************************************************************************
  * Pre-processor Definitions
  ****************************************************************************/
@@ -144,7 +148,11 @@ static volatile uint32_t     g_mic_dropped;
 
 static inline bool mic_want(void)
 {
+#ifdef CONFIG_RK3576_KWS
+  return g_tty_want || g_snd_want || rk3576_kws_active();
+#else
   return g_tty_want || g_snd_want;
+#endif
 }
 
 /****************************************************************************
@@ -274,6 +282,17 @@ static int rk3576_mic_ept_cb(FAR struct rpmsg_endpoint *ept, FAR void *data,
       rk3576_pdm_set_channel(cmd[6] - '0');
 #endif
     }
+#ifdef CONFIG_RK3576_KWS
+  else if (len >= 4 && strncmp(cmd, "KWS_", 4) == 0)
+    {
+      int n = rk3576_kws_command(cmd, len, info, sizeof(info));
+
+      if (n > 0)
+        {
+          rpmsg_sendto(ept, info, n, src);
+        }
+    }
+#endif
   else if (len >= 8 && strncmp(cmd, "MIC_INFO", 8) == 0)
     {
       int n;
@@ -325,6 +344,7 @@ static int rk3576_mic_ept_cb(FAR struct rpmsg_endpoint *ept, FAR void *data,
 static int rk3576_mic_capture_thread(int argc, FAR char *argv[])
 {
   int16_t burst[64];
+  uint32_t quiet = 0;      /* consecutive samples with |s| <= 2 */
 
   for (; ; )
     {
@@ -360,6 +380,61 @@ static int rk3576_mic_capture_thread(int argc, FAR char *argv[])
           usleep(500);
           continue;
         }
+
+      /* Dead-input watchdog.  A live MEMS mic never produces 5 s of
+       * perfect digital silence (its noise floor alone peaks well above
+       * 2 LSB behind the 24 dB CIC gain).  Flat-line means Linux stole a
+       * clock or a pin from under us — re-init reclaims them.
+       */
+
+      for (i = 0; i < got; i++)
+        {
+          if (burst[i] > 2 || burst[i] < -2)
+            {
+              break;
+            }
+        }
+
+      if (i < got)
+        {
+          quiet = 0;
+        }
+      else
+        {
+          quiet += got;
+          if (g_mic_rate > 0 && quiet > 5u * (uint32_t)g_mic_rate)
+            {
+              syslog(LOG_WARNING,
+                     "mic: 5 s of dead input, re-initializing capture\n");
+              mic_hw_stop();
+              mic_hw_init();
+              mic_hw_start();
+              quiet = 0;
+
+#ifdef CONFIG_RK3576_KWS
+              /* The restart's filter-settle transient reliably scores
+               * 0.97+; keep the engine quiet while it decays.
+               */
+
+              rk3576_kws_mute_restart();
+#endif
+            }
+        }
+
+#ifdef CONFIG_RK3576_KWS
+      /* The wake-word engine taps the stream before the host ring so a
+       * slow host can never starve it.  The host ring is only fed while
+       * a host sink actually streams; in KWS-only operation the samples
+       * stop here and the drop counter stays honest.
+       */
+
+      rk3576_kws_feed(burst, got);
+
+      if (!g_tty_want && !g_snd_want)
+        {
+          continue;
+        }
+#endif
 
       for (i = 0; i < got; i++)
         {
@@ -436,6 +511,63 @@ static int rk3576_mic_send_thread(int argc, FAR char *argv[])
   return 0;
 }
 
+#ifdef CONFIG_RK3576_KWS
+
+/****************************************************************************
+ * Name: rk3576_mic_wake_event / rk3576_mic_kws_line
+ *
+ * Description:
+ *   Transport for the wake-word engine.  A detection goes out on the
+ *   binary endpoint as RPMSG_MIC_EVT_WAKE (hdr.arg = probability in 1/1000,
+ *   hdr.seq = detection count) and, when the text endpoint is not busy
+ *   streaming raw PCM, as a human-readable "EVT WAKE ..." line too.
+ *
+ ****************************************************************************/
+
+void rk3576_mic_wake_event(float prob, uint32_t count)
+{
+  unsigned p = (unsigned)(prob * 1000.0f + 0.5f);
+
+  if (p > 999)
+    {
+      p = 999;
+    }
+
+  if (g_snd_bound && g_snd_peer != 0)
+    {
+      struct rpmsg_mic_hdr hdr;
+
+      memset(&hdr, 0, sizeof(hdr));
+      hdr.magic   = RPMSG_MIC_MAGIC;
+      hdr.type    = RPMSG_MIC_EVT_WAKE;
+      hdr.arg     = (uint16_t)p;
+      hdr.seq     = count;
+      hdr.dropped = g_mic_dropped;
+      hdr.ts_us   = mic_now_us();
+      rpmsg_sendto(&g_snd_ept, &hdr, sizeof(hdr), g_snd_peer);
+    }
+
+  if (g_mic_bound && g_mic_peer != 0 && !g_tty_want)
+    {
+      char line[48];
+      int n;
+
+      n = snprintf(line, sizeof(line), "EVT WAKE p=0.%03u n=%lu\n",
+                   p, (unsigned long)count);
+      rpmsg_sendto(&g_mic_ept, line, n, g_mic_peer);
+    }
+}
+
+void rk3576_mic_kws_line(FAR const char *line)
+{
+  if (g_mic_bound && g_mic_peer != 0 && !g_tty_want)
+    {
+      rpmsg_sendto(&g_mic_ept, line, (int)strlen(line), g_mic_peer);
+    }
+}
+
+#endif /* CONFIG_RK3576_KWS */
+
 /****************************************************************************
  * Name: rk3576_mic_device_created / destroy
  ****************************************************************************/
@@ -454,6 +586,12 @@ static void rk3576_mic_device_created(FAR struct rpmsg_device *rdev,
                        RPMSG_ADDR_ANY, RPMSG_ADDR_ANY,
                        rk3576_mic_snd_ept_cb, NULL);
       g_snd_bound = true;
+
+#ifdef CONFIG_RK3576_KWS
+      /* Linux is up: safe to start always-on capture. */
+
+      rk3576_kws_link(true);
+#endif
     }
 }
 
@@ -469,6 +607,10 @@ static void rk3576_mic_device_destroy(FAR struct rpmsg_device *rdev,
       g_snd_bound = false;
       g_snd_want  = false;
       rpmsg_destroy_ept(&g_snd_ept);
+
+#ifdef CONFIG_RK3576_KWS
+      rk3576_kws_link(false);
+#endif
     }
 }
 
@@ -506,6 +648,14 @@ int rk3576_mic_init(void)
                      rk3576_mic_capture_thread, NULL);
       kthread_create("amp_mic_tx", 120, 2048,
                      rk3576_mic_send_thread, NULL);
+
+#ifdef CONFIG_RK3576_KWS
+      /* Wake-word engine: keeps the mic in always-on capture and taps the
+       * stream inside the capture thread.
+       */
+
+      rk3576_kws_init();
+#endif
     }
 
   return rpmsg_register_callback(NULL,
