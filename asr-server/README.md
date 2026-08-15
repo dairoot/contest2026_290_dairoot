@@ -104,9 +104,11 @@ ASR_MODEL_TYPE=sense_voice_rknn
 SPEAKER_BACKEND=rknn
 ```
 
-依赖 `rknn_models/` 下的 `eres2netv2_3s.rknn` 和 `sensevoice_5s.rknn`
-（`SPEAKER_RKNN_PATH` / `ASR_RKNN_PATH` 可改），运行时
-`rknn-toolkit-lite2` 已经按 aarch64 marker 写进 `pyproject.toml`，`uv sync` 自动装。
+依赖 `rknn_models/` 下的 `sensevoice_5s.rknn` 和 `eres2netv2_3s.rknn`
+（路径可用 `ASR_RKNN_PATH` / `SPEAKER_RKNN_PATH` 改）。这两个文件加起来 647 MB，
+**没有提交到仓库**，生成方法见下面的「生成 NPU 模型」。推理运行时
+`rknn-toolkit-lite2` 已按 aarch64 marker 写进 `pyproject.toml`，板子上 `uv sync`
+会自动装，开发机不受影响。
 
 `/usr/lib/librknnrt.so` 的版本必须 >= 转换用的 rknn-toolkit2 版本，rknnlite 只认这个
 绝对路径，`LD_LIBRARY_PATH` 和 `LIBRKNNRT_PATH` 都绕不开。板子出厂是 2.0.0b0，跑
@@ -125,44 +127,96 @@ sudo cp /usr/lib/librknnrt.so /usr/lib/librknnrt.so.bak && sudo cp librknnrt.so 
 `/etc/systemd/system/zram-swap.service`（3 GB / zstd，开机自起，`zramswap.service`
 已禁用）。
 
-### 模型转换
+### 生成 NPU 模型（.rknn 不入库，需要自己转）
 
-RK3576 的 CPU 是 4×Cortex-A72 + 4×Cortex-A53，都是 ARMv8.0，没有 SDOT/i8mm，int8
-在上面提速有限；而 NPU 有 6 TOPS 闲着。ASR 和声纹都在往 RKNN 迁。
+`rknn_models/` 下的两个 `.rknn` 加起来 647 MB，没有提交到仓库，按下面三步生成。
+整个过程约 20 分钟，其中大部分时间在下模型权重和编译。
 
-链路是 PyTorch → 定长 fp32 ONNX → RKNN。RKNN 不支持动态 shape，序列长度必须在导出
-时定死；线上那份 `iic/SenseVoiceSmall-onnx` 是 int8 量化版，rknn-toolkit2 不吃，
-所以要从 PyTorch 权重重新导出 fp32。
+**为什么不能直接拿现成的 ONNX 转**：RKNN 不支持动态 shape，序列长度必须在导出时
+定死；而 modelscope 上的 `iic/SenseVoiceSmall-onnx` 是 int8 量化版，rknn-toolkit2
+不接受量化模型。所以链路是 **PyTorch → 定长 fp32 ONNX → RKNN fp16**。
+
+#### 机器要求
+
+| 步骤 | 要求 |
+| --- | --- |
+| 导出 ONNX | 任意装得上 PyTorch 的机器（macOS / Linux 均可），内存峰值 3 GB |
+| 转换 RKNN | **Linux**（x86_64 或 aarch64 都有 PyPI 包），声纹要 2 GB 内存、ASR 要 **8 GB 以上** |
+| 磁盘 | 中间产物 937 MB + 214 MB，成品 473 MB + 174 MB，留 3 GB |
+
+板子本身（3.8 GB 内存）**只够转声纹，转 ASR 会被 OOM killer 杀掉**（fp32 权重压缩
+比很差，加 zram 也救不回来），得找台内存大的 Linux 机器转完再把 `.rknn` 拷回来。
+
+#### 第 1 步：导出定长 fp32 ONNX
 
 ```bash
-# 导出：任意开发机（ASR 那步要加载 936 MB PyTorch 权重，内存峰值约 3 GB）
 uv run --with onnx --with onnxscript python tools/export_onnx.py --out-dir rknn_models
+```
 
-# 转换：rknn-toolkit2 在 x86_64 和 aarch64 上都有 PyPI 包
-python3 -m venv ~/rknn-venv && ~/rknn-venv/bin/pip install rknn-toolkit2==2.3.2 "setuptools<81"
+产出 `rknn_models/sensevoice_5s.onnx`（937 MB）和 `eres2netv2_3s.onnx`（214 MB）。
+首次运行会从 modelscope 下 936 MB 的 PyTorch 权重。
+
+窗口大小用 `--asr-seconds` / `--speaker-seconds` 调，**改了之后运行时的
+`ASR_RKNN_WINDOW_MS` 必须跟着改**，否则模型输入帧数对不上，RKNN 直接报错。
+换窗口大小重导时加 `--asr-dynamic-onnx ~/.cache/modelscope/models/iic--SenseVoiceSmall/snapshots/master/model.onnx`
+可以跳过 PyTorch 那步（省 3 GB 峰值内存和几分钟）。
+
+#### 第 2 步：转成 RKNN
+
+```bash
+python3 -m venv ~/rknn-venv
+~/rknn-venv/bin/pip install "torch==2.4.0" --index-url https://download.pytorch.org/whl/cpu
+~/rknn-venv/bin/pip install rknn-toolkit2==2.3.2 "setuptools<81" "onnx==1.16.1"
 ~/rknn-venv/bin/python tools/convert_rknn.py --model-dir rknn_models
 ```
 
-`setuptools<81` 是必须的，新版本删掉了 `pkg_resources`，rknn-toolkit2 还在用。
+三个版本钉死都是必须的，少一个就跑不通（都是实际踩过的）：
 
-**声纹（214 MB）在板子上就能转；ASR（937 MB fp32）不行**——3.8 GB 内存加 3 GB zram
-都会被 OOM killer 杀掉（fp32 权重压缩比很差，zram 帮不上忙），要找一台内存大的
-Linux 机器转，转完把 `.rknn` 拷回板子即可。
+| 钉死 | 不钉会怎样 |
+| --- | --- |
+| `torch==2.4.0` 且走 CPU 源 | rknn-toolkit2 要求 `torch<=2.4.0`，装新版会触发它自己去拉 GPU 版 torch + 3 GB CUDA 依赖 |
+| `setuptools<81` | 新版删了 `pkg_resources`，rknn-toolkit2 还在 import 它 → `ModuleNotFoundError` |
+| `onnx==1.16.1` | `onnx>=1.18` 删了 `onnx.mapping` → `AttributeError: module 'onnx' has no attribute 'mapping'` |
 
-导出产物与已验证的结论：
+转换默认走 fp16（不需要校准集），日志里会刷几十条
+`value smaller than -3e+38` 的警告——那是注意力 mask 的 -inf 常量超出 fp16 范围，
+实测输出与 CPU 逐字一致，可以忽略。转换会在工作目录留下 `check*.onnx` 中间产物
+（和原模型等大），已在 `.gitignore` 里，转完可以删。
 
-| 模型 | ONNX | 输入 | 输出 |
-| --- | --- | --- | --- |
-| SenseVoiceSmall | `sensevoice_10s.onnx`（937 MB） | `speech [1,166,560]` | `ctc_logits [1,170,25055]`、`encoder_out_lens [1]` |
-| ERes2NetV2 声纹 | `eres2netv2_3s.onnx`（214 MB） | `feats [1,298,80]` | `embedding [1,192]` |
+产出 `sensevoice_5s.rknn`（473 MB）和 `eres2netv2_3s.rknn`（174 MB）。
 
-ASR 的 `speech_lengths` / `language` / `textnorm` 三个 int32 标量输入已经固化成
-常量（整窗长度 / zh / withitn），只留一个 `speech`——RKNN 对 int32 标量输入支持
-很不稳。补零到 10 秒窗口后，三条真实语音的识别结果与线上 int8 变长模型逐字一致。
+#### 第 3 步：放到板子上并验证
 
-声纹的前端（kaldi fbank + 减均值）留在 Python 侧，只有网络本身进 NPU。不足 3 秒的
-音频**循环填充**到满窗，不要补零：1 秒音频补零后与变长参考的余弦只有 0.84~0.90，
-循环填充能到 0.98~0.99。
+```bash
+scp rknn_models/*.rknn kickpi@<板子IP>:~/asr_server/rknn_models/
+```
+
+路径可以用 `ASR_RKNN_PATH` / `SPEAKER_RKNN_PATH` 改。板子上确认能跑：
+
+```bash
+ASR_MODEL_TYPE=sense_voice_rknn SPEAKER_BACKEND=rknn \
+    uv run python tests/asr_ws/server.py
+```
+
+日志里出现 `[asr] model_type=sense_voice ... elapsed=3xx ms` 就说明 NPU 起来了
+（CPU 后端同样的音频要 700 ms 以上）。识别不出结果先查 `librknnrt.so` 版本，见上。
+
+#### 模型接口
+
+| 模型 | 输入 | 输出 |
+| --- | --- | --- |
+| SenseVoiceSmall | `speech [1,83,560]` | `ctc_logits [1,87,25055]`、`encoder_out_lens [1]` |
+| ERes2NetV2 声纹 | `feats [1,298,80]` | `embedding [1,192]` |
+
+ASR 的 `speech_lengths` / `language` / `textnorm` 三个 int32 标量输入在导出时已经
+固化成常量（整窗长度 / zh / withitn），只留一个 `speech` 输入——RKNN 对 int32 标量
+输入的支持很不稳。两个模型的前端（fbank / LFR / CMVN）都留在 Python 侧。
+
+不足一个窗口的音频怎么补，两个模型**相反**：
+
+- **ASR 补零**。尾部静音在 CTC 上解成 blank，实测与变长 CPU 模型逐字一致。
+- **声纹循环填充**。1 秒音频补零后与变长参考的余弦只有 0.84~0.90，循环填充能到
+  0.98~0.99。
 
 ## 测试
 
