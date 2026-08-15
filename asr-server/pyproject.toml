@@ -1,0 +1,49 @@
+[project]
+name = "asr-server"
+version = "0.1.0"
+description = "WebSocket ASR 服务：VAD、说话人识别与多种识别后端"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    # WebSocket/HTTP service and shared audio processing.
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "websockets>=12.0",
+    "python-dotenv>=1.0.0",
+    # VAD, speaker recognition, and SenseVoice.
+    "torch",
+    "torchaudio",
+    "funasr==1.3.14",
+    # The framework extra supplies ModelScope pipeline dependencies such as
+    # addict, datasets, Pillow, simplejson, and sortedcontainers.
+    "modelscope[framework]==1.38.1",
+    # int8 SenseVoice ONNX 后端。
+    "onnxruntime",
+    # asr_sense_voice_onnx.py 直接读模型目录里的 config.yaml。
+    "pyyaml>=6.0.3",
+    # funasr / modelscope 传递依赖，版本在此锁定。
+    "huggingface-hub>=0.34.0",
+    "transformers==4.57.6",
+    # RK3576 板子上的 NPU 推理运行时，只有 aarch64 Linux 有包。
+    # 模型转换用的 rknn-toolkit2 不在这里，见 tools/convert_rknn.py。
+    "rknn-toolkit-lite2>=2.3.2 ; platform_machine == 'aarch64' and sys_platform == 'linux'",
+
+    # Keep the version known to work with the ModelScope datasets stack.
+    "multiprocess<0.70.18",
+]
+
+# 所有模块铺平在仓库根目录，以仓库根为工作目录直接运行，不需要把自身装进环境。
+[tool.uv]
+package = false
+
+# PyPI 上 torch 的 Linux wheel（x86_64 和 aarch64 都一样）无条件依赖 cuda-toolkit、
+# nvidia-cudnn-cu13、nccl、triton——判断条件只有 platform_system == "Linux"，不看架构。
+# 改从官方 CPU 源取同版本的 +cpu 构建；macOS 仍走 PyPI，那边的 wheel 自带 MPS。
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchaudio = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
