@@ -86,9 +86,9 @@ manifest `<linkfile>` 注入，以 patch 系列放在 [`nuttx-side/`](nuttx-side
    echo KWS_INFO > /dev/ttyRPMSG0 && head -1 /dev/ttyRPMSG0   # 引擎状态
    dmesg | grep 'wake word'                # snd_rpmsg_mic: p=0.9xx
    sudo python3 tools/kws/deploy/wake_watch.py                # KEY_WAKEUP 事件
-   # 唤醒之后的识别服务（跑 NPU）
-   cd asr-server && uv sync && ASR_MODEL_TYPE=sense_voice_rknn SPEAKER_BACKEND=rknn \
-       uv run python tests/asr_ws/server.py   # 浏览器打开 http://<板子IP>:8086/
+   # 唤醒之后的识别服务（默认就走 NPU）
+   cd asr-server && uv sync && uv run python tests/asr_ws/server.py
+   # 浏览器打开 http://<板子IP>:8086/ 说话，看识别结果与说话人编号
    ```
 
 ## 五、关键技术难点（详见 board README 与提交历史）

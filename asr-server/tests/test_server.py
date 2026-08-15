@@ -11,6 +11,8 @@ from unittest.mock import patch
 import numpy as np
 import websockets
 
+import config
+
 
 SAMPLE_RATE = 16000
 CHUNK_SAMPLES = SAMPLE_RATE * 240 // 1000
@@ -167,7 +169,8 @@ class ServerProtocolTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["audio_url"], "/audio/%E6%B5%8B%E8%AF%95.wav")
         self.assertNotIn("audio_path", response)
         self.assertEqual(len(created[0].chunks), 1)
-        self.assertEqual(created[0].options["model_type"], "volc")
+        # 默认后端跟着 config.ASR_MODEL_TYPE 走（板子上是 NPU，开发机可用环境变量回退）
+        self.assertEqual(created[0].options["model_type"], config.ASR_MODEL_TYPE)
         self.assertTrue(created[0].clear_called)
 
     async def test_forwards_each_audio_frame_without_reblocking(self):
