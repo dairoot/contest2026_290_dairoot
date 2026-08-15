@@ -68,7 +68,8 @@ ASR_SERVER_WS_URL=ws://127.0.0.1:8086/ws
 
 | 取值 | 模型 | 说明 |
 | --- | --- | --- |
-| `sense_voice`（默认） | `iic/SenseVoiceSmall-onnx` | int8 ONNX，241 MB 权重，onnxruntime CPU 推理 |
+| `sense_voice_rknn`（默认） | `rknn_models/sensevoice_5s.rknn` | RKNN fp16，跑 RK3576 NPU |
+| `sense_voice` | `iic/SenseVoiceSmall-onnx` | int8 ONNX，onnxruntime CPU 推理；没有 NPU 的机器上用这个 |
 | `volc` | 火山流式 ASR | 需要 `.env` 里的凭据，走网络 |
 
 `sense_voice_onnx` 是 `sense_voice` 的别名。PyTorch fp32 的 `iic/SenseVoiceSmall`
@@ -97,11 +98,12 @@ NPU 是定长窗口，耗时与音频长短无关：5 秒窗口恒定约 390 ms�
 655 ms。所以窗口不是越大越好——10 秒窗口下 3.7 秒的短句反而打不过 CPU。默认用
 5 秒，`ASR_RKNN_WINDOW_MS` 和导出时的 `--asr-seconds` 必须一致。
 
-打开 NPU：
+**NPU 是默认后端**，板子上直接 `uv run python server.py` 即可，不需要额外配置。
 
-```dotenv
-ASR_MODEL_TYPE=sense_voice_rknn
-SPEAKER_BACKEND=rknn
+没有 NPU 的机器（开发机、或板子上想对比 CPU）用环境变量回退，不必改代码：
+
+```bash
+ASR_MODEL_TYPE=sense_voice SPEAKER_BACKEND=modelscope uv run python server.py
 ```
 
 依赖 `rknn_models/` 下的 `sensevoice_5s.rknn` 和 `eres2netv2_3s.rknn`

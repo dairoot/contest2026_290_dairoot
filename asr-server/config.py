@@ -4,8 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ASR 后端：sense_voice（本地 int8 ONNX）/ volc（火山流式）
-ASR_MODEL_TYPE = os.environ.get("ASR_MODEL_TYPE", "sense_voice")
+# ASR 后端：sense_voice_rknn（RK3576 NPU，默认）/ sense_voice（本地 int8 ONNX，CPU）
+# / volc（火山流式）。开发机上没有 NPU，用 ASR_MODEL_TYPE=sense_voice 回退。
+ASR_MODEL_TYPE = os.environ.get("ASR_MODEL_TYPE", "sense_voice_rknn")
 # onnxruntime 的 intra-op 线程数，0 表示按核数自动决定
 ASR_ONNX_THREADS = int(os.environ.get("ASR_ONNX_THREADS", "0"))
 
@@ -16,8 +17,8 @@ ASR_RKNN_PATH = os.environ.get(
 )
 ASR_RKNN_WINDOW_MS = int(os.environ.get("ASR_RKNN_WINDOW_MS", "5000"))
 
-# 声纹后端：modelscope（PyTorch CPU）/ rknn（RK3576 NPU）
-SPEAKER_BACKEND = os.environ.get("SPEAKER_BACKEND", "modelscope")
+# 声纹后端：rknn（RK3576 NPU，默认）/ modelscope（PyTorch CPU 回退）
+SPEAKER_BACKEND = os.environ.get("SPEAKER_BACKEND", "rknn")
 SPEAKER_RKNN_PATH = os.environ.get(
     "SPEAKER_RKNN_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "rknn_models", "eres2netv2_3s.rknn"),

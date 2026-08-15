@@ -25,6 +25,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 from asr_client import AsrClient
+from config import ASR_MODEL_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +154,7 @@ def _create_asr_client(
 async def handle_connection(
     websocket: Any,
     *,
-    model_type: str = "volc",
+    model_type: str = ASR_MODEL_TYPE,
     slow_reply_silence_duration_ms: int = 960,
     audio_save_dir: str = "",
     client_factory: AsrClientFactory | None = None,
@@ -242,7 +243,7 @@ async def serve(
     *,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
-    model_type: str = "sense_voice",
+    model_type: str = ASR_MODEL_TYPE,
     slow_reply_silence_duration_ms: int = 960,
     audio_save_dir: str = "",
     max_frame_bytes: int = 1024 * 1024,
