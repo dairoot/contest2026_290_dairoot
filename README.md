@@ -101,7 +101,7 @@ manifest `<linkfile>` 注入，以 patch 系列放在 [`nuttx-side/`](nuttx-side
 | uart_rpmsg 私有帧协议与 Linux rpmsg_tty 裸字节不兼容 | 自建裸字节回显端点，wire-compatible |
 | 板上无串口可读 | 发明 “RAMLOG + Linux devmem dump” 无串口调试法定位全部问题 |
 | openvela 开源版无离线唤醒引擎（media_trigger 仅留接口） | 自研纯 C log-mel+DS-CNN 引擎：Python 训练管线与 C 实现同源查表、板上金标准对拍（&#124;Δprob&#124;<1e-7），常听于 cpu3，唤醒事件走 rpmsg 变成 Linux input 事件 |
-| RKNN 不支持动态 shape，而语音长度天然可变 | 定长窗口导出 + 按帧对齐切段：窗口大小直接决定耗时（5 s 窗恒定 390 ms，10 s 窗 655 ms，选大了短句反而打不过 CPU）；长句最后一窗向前对齐成满窗、重叠部分按帧丢弃，不漏字不重复 |
+| RKNN 不支持动态 shape，而语音长度天然可变 | 定长窗口导出 + 按帧对齐切段：窗口大小直接等于耗时（5 s 窗恒定 390 ms、10 s 窗 655 ms，选大了短句反而打不过 CPU）；长句最后一窗向前对齐成满窗、重叠部分按帧丢弃，不漏字不重复 |
 | 3.8 GB 内存跑不动 936 MB fp32 权重 | 本地 ASR 全面转 int8 ONNX / RKNN fp16，加载峰值 2993 MB → 1300 MB，常驻 2.0 GB |
 
 ## 六、AI Coding 使用说明
