@@ -8,9 +8,9 @@ PyTorch 权重重新导出 fp32。
 
     uv run --with onnx --with onnxscript python tools/export_onnx.py --out-dir rknn_models
 
-产物：
-    rknn_models/sensevoice_<sec>s.onnx    [1, N, 560] -> ctc_logits [1, N+4, 25055]
-    rknn_models/eres2netv2_<sec>s.onnx    [1, F, 80]  -> embedding  [1, 192]
+产物（默认窗口，与 config.py 的默认值对齐）：
+    rknn_models/sensevoice_5s.onnx    [1, 83, 560] -> ctc_logits [1, 87, 25055]
+    rknn_models/eres2netv2_3s.onnx    [1, 298, 80] -> embedding  [1, 192]
 
 注意 ASR 那步会加载 936 MB 的 PyTorch 权重，内存峰值约 3 GB，别在板子上跑。
 """
@@ -145,7 +145,12 @@ def export_speaker(out_dir: str, seconds: float) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", default="rknn_models")
-    parser.add_argument("--asr-seconds", type=float, default=10.0, help="ASR 定长窗口秒数")
+    parser.add_argument(
+        "--asr-seconds",
+        type=float,
+        default=5.0,
+        help="ASR 定长窗口秒数，必须与运行时的 ASR_RKNN_WINDOW_MS 一致",
+    )
     parser.add_argument(
         "--speaker-seconds",
         type=float,
