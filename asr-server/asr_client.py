@@ -11,7 +11,11 @@ from config import ASR_MODEL_TYPE
 from speaker import SpeakerWorker
 from vad import VadWorker
 from event_emitter import AsyncEventEmitter
-from asr_model.asr_sense_voice_rknn import SenseVoiceRknnWorker # 提前加载rkNN模型
+from config import ASR_RKNN_PATH
+from utils._rknn import rknn_available
+
+if rknn_available(ASR_RKNN_PATH, "asr"):
+    from asr_model.asr_sense_voice_rknn import SenseVoiceRknnWorker # 提前加载rkNN模型
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +36,8 @@ def get_asr_worker(model_type):
         from utils._rknn import rknn_available
 
         if rknn_available(ASR_RKNN_PATH, "asr"):
-
             return SenseVoiceRknnWorker()
+            
         model_type = "sense_voice"
     # sense_voice_onnx 是历史别名，PyTorch 那份后端已经删掉
     if model_type in ("sense_voice", "sense_voice_onnx"):
