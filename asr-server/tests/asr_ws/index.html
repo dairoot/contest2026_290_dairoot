@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>实时说话人识别</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; color: #222; }
+    h2 { margin-bottom: 12px; }
+    .toolbar { display: flex; align-items: center; gap: 12px; }
+    button { padding: 10px 22px; font-size: 15px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    button.stop { background: #dc2626; }
+    button:disabled { background: #9ca3af; cursor: not-allowed; }
+    #status { color: #6b7280; font-size: 14px; }
+    #log { margin-top: 20px; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px 16px; min-height: 360px; max-height: 60vh; overflow-y: auto; background: #fafafa; }
+    .line { padding: 8px 0; border-bottom: 1px dashed #eee; line-height: 1.5; }
+    .line:last-child { border-bottom: 0; }
+    .spk { color: #2563eb; font-weight: 600; margin-right: 8px; }
+    .ts { color: #9ca3af; font-size: 12px; margin-right: 8px; }
+    .elapsed { color: #9ca3af; font-size: 12px; margin-left: 8px; }
+  </style>
+</head>
+<body>
+  <h2>实时说话人识别</h2>
+  <div class="toolbar">
+    <button id="btn">开始聆听</button>
+    <span id="status">未连接</span>
+  </div>
+  <div id="log"></div>
+
+<script>
+const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+const SAMPLE_RATE = 16000;
+const BLOCK_SIZE = 3840; // 240ms * 16000 / 1000
+
+const btn = document.getElementById('btn');
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+
+let ws = null;
+let audioCtx = null;
+let source = null;
+let workletNode = null;
+let stream = null;
+let running = false;
+
+const workletCode = `
+class PCMWorklet extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.buffer = new Float32Array(${BLOCK_SIZE});
+    this.offset = 0;
+  }
+  process(inputs) {
+    const input = inputs[0] && inputs[0][0];
+    if (!input) return true;
+    let i = 0;
+    while (i < input.length) {
+      const n = Math.min(input.length - i, ${BLOCK_SIZE} - this.offset);
+      this.buffer.set(input.subarray(i, i + n), this.offset);
+      this.offset += n;
+      i += n;
+      if (this.offset >= ${BLOCK_SIZE}) {
+        this.port.postMessage(this.buffer);
+        this.buffer = new Float32Array(${BLOCK_SIZE});
+        this.offset = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('pcm-worklet', PCMWorklet);
+`;
+
+function nowHMS() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function appendLine(speaker, content, elapsed) {
+  const div = document.createElement('div');
+  div.className = 'line';
+  div.innerHTML = `<span class="ts"></span><span class="spk"></span><span class="txt"></span><span class="elapsed"></span>`;
+  div.querySelector('.ts').textContent = nowHMS();
+  div.querySelector('.spk').textContent = speaker + ':';
+  div.querySelector('.txt').textContent = content;
+  if (typeof elapsed === 'number' && !Number.isNaN(elapsed)) {
+    div.querySelector('.elapsed').textContent = `耗时 ${Math.round(elapsed * 1000)} ms`;
+  }
+  logEl.appendChild(div);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setStatus(text) {
+  statusEl.textContent = text;
+}
+
+async function start() {
+  setStatus('连接中...');
+  ws = new WebSocket(WS_URL);
+  ws.binaryType = 'arraybuffer';
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      appendLine(data.speaker, data.content, data.elapsed);
+    } catch (err) {
+      console.error('bad msg', err);
+    }
+  };
+  ws.onclose = () => { setStatus('已断开'); stop(); };
+  ws.onerror = (e) => { console.error(e); setStatus('连接错误'); };
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve, { once: true });
+    ws.addEventListener('error', reject, { once: true });
+  });
+
+  stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      channelCount: 1, // 单声道
+      echoCancellation: true, // 回声消除
+      noiseSuppression: true, // 降噪
+      autoGainControl: true, // 自动增益
+    },
+  });
+  audioCtx = new AudioContext({ sampleRate: SAMPLE_RATE });
+  const blob = new Blob([workletCode], { type: 'application/javascript' });
+  await audioCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+  source = audioCtx.createMediaStreamSource(stream);
+  workletNode = new AudioWorkletNode(audioCtx, 'pcm-worklet');
+  workletNode.port.onmessage = (e) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(e.data.buffer);
+    }
+  };
+  source.connect(workletNode);
+
+  running = true;
+  btn.textContent = '停止聆听';
+  btn.classList.add('stop');
+  setStatus(`聆听中 (采样率 ${audioCtx.sampleRate} Hz)`);
+}
+
+async function stop() {
+  running = false;
+  btn.textContent = '开始聆听';
+  btn.classList.remove('stop');
+  try { workletNode && workletNode.disconnect(); } catch {}
+  try { source && source.disconnect(); } catch {}
+  try { audioCtx && await audioCtx.close(); } catch {}
+  try { stream && stream.getTracks().forEach(t => t.stop()); } catch {}
+  try { ws && ws.readyState === WebSocket.OPEN && ws.close(); } catch {}
+  workletNode = source = audioCtx = stream = ws = null;
+  if (statusEl.textContent !== '已断开' && statusEl.textContent !== '连接错误') {
+    setStatus('已停止');
+  }
+}
+
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  try {
+    if (running) await stop();
+    else await start();
+  } catch (e) {
+    console.error(e);
+    setStatus('启动失败: ' + e.message);
+    await stop();
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+build
+dist
+*.egg
+*.egg-info
+.DS_Store
+__pycache__/
+.idea/
+
+# uv
+.venv/
+
+# pytest and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy
+.mypy_cache/
+
+.env
+*.log
+*.pt
+
+# asr_wsv3 self-signed TLS
+tests/asr_wsv3/cert.pem
+tests/asr_wsv3/key.pem
+
+# speaker_fewshot.py 以进程 CWD（仓库根目录）为基准写权重
+speaker_model_weights/*
+
+audio_logs/*
+sample_logs/*
+sample_logs_denoised/*
+# 从 sample_logs 抽出来的声纹 embedding，与原始录音同源，跟着一起排除；
+# 需要时用 tests/asr_wsv4/bench_extract.py 在本地重新生成。
+tests/asr_wsv4/bench_embeddings.npz
+
+test_audio/*
+
+# ONNX / RKNN 导出产物，几百 MB，不进版本库
+rknn_models/
+
+# rknn-toolkit2 转换时在工作目录里吐的中间产物
+check*.onnx
