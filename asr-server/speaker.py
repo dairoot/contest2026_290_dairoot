@@ -2,12 +2,13 @@ import asyncio
 
 import numpy as np
 
-from config import SPEAKER_BACKEND
+from config import SPEAKER_BACKEND, SPEAKER_RKNN_PATH
+from utils._rknn import rknn_available
 
 _MODEL_ID = "iic/speech_eres2netv2w24s4ep4_sv_zh-cn_16k-common"
 
-if SPEAKER_BACKEND == "rknn":
-    # RK3576 的 NPU：板子 CPU 上一次 4.6 秒，NPU 0.47 秒
+if SPEAKER_BACKEND == "rknn" and rknn_available(SPEAKER_RKNN_PATH, "speaker"):
+    # RK3576 的 NPU：板子 CPU 上一次 4.6 秒，NPU 0.52 秒
     from speaker_rknn import generate_embedding as _generate_embedding
 
     sv_pipeline = None

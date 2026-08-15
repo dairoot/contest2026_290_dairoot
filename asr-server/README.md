@@ -85,7 +85,7 @@ librosa/numba）。删除前在 188 条本地录音上与 PyTorch fp32 做过对
 
 ## NPU（RK3576）
 
-ASR 和声纹都已经跑在 NPU 上。板子实测（RK3576，8 核 CPU / 6 TOPS NPU）：
+ASR 和声纹**默认都跑在 NPU 上**，板子实测（RK3576，8 核 CPU / 6 TOPS NPU）：
 
 | | CPU | NPU | 备注 |
 | --- | --- | --- | --- |
@@ -98,16 +98,39 @@ NPU 是定长窗口，耗时与音频长短无关：5 秒窗口恒定约 390 ms�
 655 ms。所以窗口不是越大越好——10 秒窗口下 3.7 秒的短句反而打不过 CPU。默认用
 5 秒，`ASR_RKNN_WINDOW_MS` 和导出时的 `--asr-seconds` 必须一致。
 
-**NPU 是默认后端**，板子上直接 `uv run python server.py` 即可，不需要额外配置。
+### 怎么选后端
 
-没有 NPU 的机器（开发机、或板子上想对比 CPU）用环境变量回退，不必改代码：
+NPU 是定长窗口，耗时与音频长短无关；CPU 是变长的，句子越短越快。两个模型的取舍
+因此完全不同：
+
+| | NPU | CPU | 交叉点 |
+| --- | --- | --- | --- |
+| ASR | 恒定 390 ms（5 秒窗） | 约 180 ms / 秒音频 | **约 2.2 秒**，短句 CPU 更快 |
+| 声纹 | 恒定 519 ms（3 秒窗） | 3 秒音频 4589 ms | 没有，NPU 恒赢 |
+
+**默认两个模型都走 NPU**，板子上直接 `uv run python server.py` 即可，不需要额外
+配置。声纹无论音频多短都是 NPU 快一个数量级；ASR 交给 NPU 则把 CPU 整个让出来给
+其余 7 核，耗时恒定 390 ms 不随句子变长而涨。
+
+如果场景以 2 秒以内的短命令词为主，把 ASR 切回 CPU 会更快一点，还省掉 473 MB 的
+ASR RKNN 模型不用加载：
 
 ```bash
-ASR_MODEL_TYPE=sense_voice SPEAKER_BACKEND=modelscope uv run python server.py
+ASR_MODEL_TYPE=sense_voice uv run python server.py
 ```
 
-依赖 `rknn_models/` 下的 `sensevoice_5s.rknn` 和 `eres2netv2_3s.rknn`
-（路径可用 `ASR_RKNN_PATH` / `SPEAKER_RKNN_PATH` 改）。这两个文件加起来 647 MB，
+窗口越小 NPU 越快、交叉点越靠前（3 秒窗约 240 ms），代价是超窗的句子要切段——
+用 `tools/export_onnx.py --asr-seconds` 重新导出即可。
+
+没有 NPU 的机器（开发机）把声纹也回退到 CPU：
+
+```bash
+SPEAKER_BACKEND=modelscope uv run python server.py
+```
+
+默认配置依赖 `rknn_models/` 下的 `sensevoice_5s.rknn`（473 MB）和
+`eres2netv2_3s.rknn`（174 MB）；ASR 切回 CPU 时只需要后者。路径可用 `SPEAKER_RKNN_PATH` / `ASR_RKNN_PATH` 改。
+这些文件
 **没有提交到仓库**，生成方法见下面的「生成 NPU 模型」。推理运行时
 `rknn-toolkit-lite2` 已按 aarch64 marker 写进 `pyproject.toml`，板子上 `uv sync`
 会自动装，开发机不受影响。

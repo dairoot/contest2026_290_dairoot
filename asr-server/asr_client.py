@@ -11,6 +11,7 @@ from config import ASR_MODEL_TYPE
 from speaker import SpeakerWorker
 from vad import VadWorker
 from event_emitter import AsyncEventEmitter
+from asr_model.asr_sense_voice_rknn import SenseVoiceRknnWorker # 提前加载rkNN模型
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +28,13 @@ def get_asr_worker(model_type):
     # 各后端都懒加载：选了 NPU 就不该再把 241 MB 的 ONNX 会话拉起来。
     # 想让加载失败在启动时暴露而不是等第一个连接，在服务启动时调一次本函数即可。
     if model_type == "sense_voice_rknn":
-        from asr_model.asr_sense_voice_rknn import SenseVoiceRknnWorker
+        from config import ASR_RKNN_PATH
+        from utils._rknn import rknn_available
 
-        return SenseVoiceRknnWorker()
+        if rknn_available(ASR_RKNN_PATH, "asr"):
+
+            return SenseVoiceRknnWorker()
+        model_type = "sense_voice"
     # sense_voice_onnx 是历史别名，PyTorch 那份后端已经删掉
     if model_type in ("sense_voice", "sense_voice_onnx"):
         from asr_model.asr_sense_voice_onnx import SenseVoiceOnnxWorker

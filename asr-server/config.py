@@ -4,8 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ASR 后端：sense_voice_rknn（RK3576 NPU，默认）/ sense_voice（本地 int8 ONNX，CPU）
-# / volc（火山流式）。开发机上没有 NPU，用 ASR_MODEL_TYPE=sense_voice 回退。
+# ASR 后端：sense_voice_rknn（RK3576 NPU，默认）/ sense_voice（int8 ONNX，CPU）
+# / volc（火山流式）。两个模型默认都走 NPU；短句为主的场景可切回 CPU，取舍见
+# README「怎么选后端」。环境不支持 NPU 时自动回退，见 utils/_rknn.py
 ASR_MODEL_TYPE = os.environ.get("ASR_MODEL_TYPE", "sense_voice_rknn")
 # onnxruntime 的 intra-op 线程数，0 表示按核数自动决定
 ASR_ONNX_THREADS = int(os.environ.get("ASR_ONNX_THREADS", "0"))
