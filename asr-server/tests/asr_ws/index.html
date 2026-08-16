@@ -16,6 +16,8 @@
     .line { padding: 8px 0; border-bottom: 1px dashed #eee; line-height: 1.5; }
     .line:last-child { border-bottom: 0; }
     .spk { color: #2563eb; font-weight: 600; margin-right: 8px; }
+    button.play { display: inline-flex; align-items: center; justify-content: center; padding: 0; width: 22px; height: 22px; border-radius: 50%; background: #e0e9ff; color: #2563eb; margin-right: 8px; vertical-align: middle; }
+    button.play:disabled { background: #f3f4f6; color: #9ca3af; }
     .ts { color: #9ca3af; font-size: 12px; margin-right: 8px; }
     .elapsed { color: #9ca3af; font-size: 12px; margin-left: 8px; }
   </style>
@@ -78,10 +80,49 @@ function nowHMS() {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-function appendLine(speaker, content, elapsed) {
+let playing = null; // { audio, btn }
+
+// 用 SVG 而不是 ▶ / ⏸ 字形：字形在字符宽度内本身就不居中，各系统字体还不一样。
+// 坐标即 22px 按钮内的像素；三角形按质心（而非包围盒）落在圆心，视觉上才是正的。
+const ICON_PLAY = '<svg viewBox="0 0 22 22" width="22" height="22" fill="currentColor"><path d="M8.2 6L16.6 11L8.2 16Z"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 22 22" width="22" height="22" fill="currentColor"><path d="M7.3 6h2.6v10H7.3zM12.1 6h2.6v10H12.1z"/></svg>';
+
+function stopPlaying() {
+  if (!playing) return;
+  playing.audio.pause();
+  playing.btn.innerHTML = ICON_PLAY;
+  playing = null;
+}
+
+function makePlayButton(audioUrl) {
+  const btn = document.createElement('button');
+  btn.className = 'play';
+  btn.innerHTML = ICON_PLAY;
+  if (!audioUrl) {
+    btn.disabled = true;
+    btn.title = '无音频';
+    return btn;
+  }
+  btn.title = '播放录音';
+  btn.addEventListener('click', () => {
+    if (playing && playing.btn === btn) { stopPlaying(); return; }
+    stopPlaying();
+    const audio = new Audio(audioUrl);
+    const reset = () => { if (playing && playing.audio === audio) stopPlaying(); };
+    audio.addEventListener('ended', reset);
+    audio.addEventListener('error', () => { setStatus('音频加载失败'); reset(); });
+    playing = { audio, btn };
+    btn.innerHTML = ICON_PAUSE;
+    audio.play().catch(err => { console.error(err); reset(); });
+  });
+  return btn;
+}
+
+function appendLine(speaker, content, elapsed, audioUrl) {
   const div = document.createElement('div');
   div.className = 'line';
   div.innerHTML = `<span class="ts"></span><span class="spk"></span><span class="txt"></span><span class="elapsed"></span>`;
+  div.prepend(makePlayButton(audioUrl));
   div.querySelector('.ts').textContent = nowHMS();
   div.querySelector('.spk').textContent = speaker + ':';
   div.querySelector('.txt').textContent = content;
@@ -103,7 +144,7 @@ async function start() {
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
-      appendLine(data.speaker, data.content, data.elapsed);
+      appendLine(data.speaker, data.content, data.elapsed, data.audio_url);
     } catch (err) {
       console.error('bad msg', err);
     }
