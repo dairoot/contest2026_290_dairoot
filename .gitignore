@@ -32,3 +32,6 @@ board/contest_board/linux-side/snd-rpmsg-mic/*.mod.c
 board/contest_board/linux-side/snd-rpmsg-mic/modules.order
 board/contest_board/linux-side/snd-rpmsg-mic/Module.symvers
 board/contest_board/linux-side/snd-rpmsg-mic/.*.cmd
+
+# macOS
+.DS_Store
