@@ -50,13 +50,14 @@ asyncio.run(main())
 仅当检测到一段完整语音并完成识别后，服务端推送一条消息：
 
 ```json
-{"speaker": "说话人1", "content": "你好，今天天气怎么样"}
+{"speaker": "说话人1", "content": "你好，今天天气怎么样", "audio_url": "/audio/20260816/121212_你好.wav"}
 ```
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `speaker` | string | `说话人N`，`N` 从 1 递增；同一声纹会复用已分配的名字 |
 | `content` | string | ASR 识别文本 |
+| `audio_url` | string \| null | 本段录音的 HTTP 地址，GET 即得 16 kHz 单声道 WAV；落盘失败时为 `null` |
 
 说话人判定：当前分段的声纹与历史记录逐个比对，余弦相似度 `> 0.39`（`SPEAKER_THRESHOLD`）即视为同一人，否则分配新的 `说话人N`。
 

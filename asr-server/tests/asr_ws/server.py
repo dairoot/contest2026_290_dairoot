@@ -4,6 +4,7 @@ import logging
 import mimetypes
 import os
 import sys
+from urllib.parse import quote, unquote
 
 import numpy as np
 import websockets
@@ -11,7 +12,8 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 # 仓库根目录加入 sys.path，便于直接 `python tests/asr_ws/server.py` 运行
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, ROOT)
 
 from asr_client import AsrClient
 
@@ -20,16 +22,32 @@ logger = logging.getLogger(__name__)
 HERE = os.path.dirname(os.path.abspath(__file__))
 PORT = 8086
 WS_PATH = "/ws"
+AUDIO_URL_PREFIX = "/audio/"
+AUDIO_DIR = os.path.join(ROOT, "audio_logs")  # AsrClient 默认的录音落盘目录
 
+
+def audio_path_to_url(audio_path):
+    """把本地录音路径映射成 /audio/ 下的 URL，不向前端暴露磁盘路径。"""
+    if not audio_path:
+        return None
+    relative_path = os.path.relpath(audio_path, AUDIO_DIR)
+    if relative_path.startswith(".."):
+        return None
+    return AUDIO_URL_PREFIX + quote(relative_path.replace(os.sep, "/"))
 
 
 def process_request(connection, request):
     if request.path == WS_PATH:
         return None
 
-    path = "/index.html" if request.path in ("/", "") else request.path
-    file_path = os.path.normpath(os.path.join(HERE, path.lstrip("/")))
-    if not file_path.startswith(HERE) or not os.path.isfile(file_path):
+    if request.path.startswith(AUDIO_URL_PREFIX):
+        root = AUDIO_DIR
+        path = unquote(request.path[len(AUDIO_URL_PREFIX) :])
+    else:
+        root = HERE
+        path = "/index.html" if request.path in ("/", "") else request.path
+    file_path = os.path.normpath(os.path.join(root, path.lstrip("/")))
+    if not file_path.startswith(root + os.sep) or not os.path.isfile(file_path):
         return Response(404, "Not Found", Headers([("Content-Length", "0")]), b"")
 
     with open(file_path, "rb") as f:
@@ -54,7 +72,12 @@ async def handle_connection(ws) -> None:
         logger.info("speaker=%s score=%s content=%s", speaker_name, score, payload["content"])
         await ws.send(
             json.dumps(
-                {"speaker": speaker_name, "content": payload["content"], "elapsed": payload["elapsed"]},
+                {
+                    "speaker": speaker_name,
+                    "content": payload["content"],
+                    "elapsed": payload["elapsed"],
+                    "audio_url": audio_path_to_url(payload.get("audio_path")),
+                },
                 ensure_ascii=False,
             )
         )
