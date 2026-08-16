@@ -20,7 +20,7 @@
 - **Linux 侧接力做识别**：唤醒之后，Linux 的 7 个核与 **6 TOPS NPU** 承担实时语音
   识别（SenseVoiceSmall）与说话人辨认（ERes2NetV2），两个模型都转成 RKNN 跑在 NPU
   上——声纹 4589 ms → **519 ms**，识别 702 ms → **378 ms**，端到端「说完到出结果」
-  约 620 ms。小核常听、大核 + NPU 出结果，见 [`asr-server/`](asr-server/)
+  约 620 ms。小核常听、大核 + NPU 出结果，见 [`linux-apps/asr-server/`](linux-apps/asr-server/)
 
 **已上板实测通过**：openvela 在 cpu3 稳定运行（心跳精确 500ms）、Linux 7 核不受
 影响、`/dev/ttyRPMSG0` 双向回显 50/50 零丢失、openvela NuttShell 在 UART5 可交互。
@@ -49,7 +49,9 @@ contest2026_290_dairoot/
 │   └── linux-side/                 Linux 侧配套文件（DTS/its/分区/defconfig）
 ├── nuttx-side/                     ★ nuttx 公共仓侧的 RK3576 芯片层补丁（git am）
 ├── tools/kws/                      ★ 离线唤醒词：训练→导出→对拍→评测→烧写全管线
-├── asr-server/                     ★ Linux 侧语音识别 + 声纹（两个模型都跑 NPU）
+├── linux-apps/                     ★ Linux 侧用户态服务（模型都跑 RK3576 NPU）
+│   ├── asr-server/                 语音识别 + 声纹（SenseVoice / ERes2NetV2）
+│   └── camera-server/              摄像头视频流 VPU 硬解 + yolo11n 检测
 └── logs/                           AI Coding 日志
 ```
 
@@ -87,7 +89,7 @@ manifest `<linkfile>` 注入，以 patch 系列放在 [`nuttx-side/`](nuttx-side
    dmesg | grep 'wake word'                # snd_rpmsg_mic: p=0.9xx
    sudo python3 tools/kws/deploy/wake_watch.py                # KEY_WAKEUP 事件
    # 唤醒之后的识别服务（默认就走 NPU）
-   cd asr-server && uv sync && uv run python tests/asr_ws/server.py
+   cd linux-apps/asr-server && uv sync && uv run python tests/asr_ws/server.py
    # 浏览器打开 http://<板子IP>:8086/ 说话，看识别结果与说话人编号
    ```
 
