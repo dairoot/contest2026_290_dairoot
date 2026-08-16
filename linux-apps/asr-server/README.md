@@ -2,8 +2,8 @@
 
 RK3576 上 Linux 侧的语音链路，接在 openvela 侧的离线唤醒之后：cpu3 上的 openvela
 常听「你好，openvela」，唤醒后由本服务在 Linux 的 7 个核 + NPU 上做实时识别与说话人
-辨认。唤醒那一半见 [`../tools/kws/`](../tools/kws/) 和
-[`../board/contest_board/`](../board/contest_board/)。
+辨认。唤醒那一半见 [`../../tools/kws/`](../../tools/kws/) 和
+[`../../board/contest_board/`](../../board/contest_board/)。
 
 `server.py` 把 `asr_client.AsrClient` 公开为 WebSocket 服务，每条连接拥有独立的
 VAD、ASR 和说话人状态。**ASR 与声纹两个模型都跑在 RK3576 的 6 TOPS NPU 上**，
