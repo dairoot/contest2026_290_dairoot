@@ -1,0 +1,5 @@
+__pycache__/
+
+# RKNN 模型产物，不进版本库（见 README 的生成步骤）
+*.rknn
+*.onnx
