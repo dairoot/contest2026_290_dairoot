@@ -109,19 +109,26 @@ def build_sets():
     return out
 
 
+REARM = 0.50                            # kws.h KWS_REARM_THRESHOLD
+
+
 def room_events(model, mean, std, path):
-    """Board-equivalent false wakes (2 s refractory) per threshold."""
+    """Board-equivalent false wakes per threshold: 2 s refractory, and
+    the engine re-arms only once the smoothed score fell below REARM."""
     _, p = peak_score(model, mean, std, load_wav_16k(path))
     sm = np.convolve(p, np.ones(SMOOTH) / SMOOTH, mode="valid")
     t = (np.arange(len(sm)) * INFER_EVERY + K.T_FRAMES) * K.HOP / K.SR
     secs = (len(p) * INFER_EVERY + K.T_FRAMES) * K.HOP / K.SR
     ev = {}
     for th in THRS:
-        n, last = 0, -10.0
+        n, last, armed = 0, -10.0, True
         for ti, s in zip(t, sm):
-            if s >= th and ti - last > 2.0:
+            if not armed and s < REARM:
+                armed = True
+            if armed and s >= th and ti - last > 2.0:
                 n += 1
                 last = ti
+                armed = False
         ev[th] = n
     return ev, secs, float(sm.max())
 

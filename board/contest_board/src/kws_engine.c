@@ -16,6 +16,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ****************************************************************************/
 
+#include <stdbool.h>
 #include <string.h>
 #include <time.h>
 
@@ -41,6 +42,7 @@ static int     g_smooth_n;
 
 static volatile float g_threshold = KWS_DEFAULT_THRESHOLD;
 static int     g_holdoff;
+static bool    g_armed;                  /* re-arms once score < REARM */
 
 static kws_detect_cb_t g_cb;
 static void           *g_cb_arg;
@@ -114,10 +116,16 @@ static void run_inference(void)
       g_stats.peak = sum;
     }
 
-  if (g_holdoff == 0 && sum >= g_threshold)
+  if (!g_armed && sum < KWS_REARM_THRESHOLD)
+    {
+      g_armed = true;
+    }
+
+  if (g_armed && g_holdoff == 0 && sum >= g_threshold)
     {
       g_stats.detections++;
       g_holdoff = KWS_REFRACT_FRAMES;
+      g_armed = false;
       if (g_cb != NULL)
         {
           g_cb(sum, g_cb_arg);
@@ -156,6 +164,7 @@ void kws_engine_init(kws_detect_cb_t cb, void *arg)
   g_frames = 0;
   g_smooth_n = 0;
   g_holdoff = KWS_WARMUP_FRAMES;
+  g_armed = true;
   g_cb = cb;
   g_cb_arg = arg;
 }
