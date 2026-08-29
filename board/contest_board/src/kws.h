@@ -46,6 +46,19 @@
 #  define KWS_REFRACT_FRAMES 200        /* 2 s */
 #endif
 
+/* Hysteresis: after a detection the engine stays disarmed until the
+ * smoothed score has fallen below KWS_REARM_THRESHOLD, on top of the
+ * refractory period.  The v7 models keep scoring a just-spoken phrase
+ * above the threshold for up to 3-4 s while it slides out of the window
+ * (owner's takes, 2026-08-29), which produced a second "ding" the moment
+ * the 2 s refractory expired.  Two genuine wakes are always separated by
+ * a dip in the score, so nothing real is lost.
+ */
+
+#ifndef KWS_REARM_THRESHOLD
+#  define KWS_REARM_THRESHOLD 0.50f
+#endif
+
 /* Detections are suppressed for the first KWS_WARMUP_FRAMES of AUDIO
  * after (re)init.  The Linux boot deterministically pops the speaker
  * twice while initializing the ES8388 (observed at 3.7 s and 8.8 s of

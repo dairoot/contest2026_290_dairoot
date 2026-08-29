@@ -228,17 +228,21 @@ def synth_rir():
 
 
 def compose_window(phrase, bank, end_back_s=(0.0, 0.40), reverb_p=0.35,
-                   snr_db=(5.0, 35.0), noise_p=1.0):
+                   snr_db=(5.0, 35.0), noise_p=1.0, leaving=False):
     """Place `phrase` into a WS window over a noise bed; returns int16.
 
     Every window gets a noise bed: a live stream never contains digital
     silence, and log(eps) frames make windows the board can never produce
     (the v6 recipe left 25% of windows with an all-zero floor).
+
+    leaving=True places the phrase as given by end_back_s even when it is
+    long (no rescale / natural-pace override): the phrase sliding OUT of
+    the window, head clipped, floor after it.
     """
     win = np.zeros(WS, dtype=np.float32)
     if phrase is not None and len(phrase):
         limit = WS - int(0.35 * SR)                       # 1.665 s
-        if len(phrase) > limit:
+        if len(phrase) > limit and not leaving:
             # Real speakers stretch the phrase past the 2.0 s window (the
             # Mandarin 欧朋维拉 renderings run 2.0-2.3 s); v6 squeezed
             # anything longer than 1.67 s down to 1.6 s, so the model never
@@ -346,6 +350,11 @@ def main():
         for _ in range(2):
             cut = phrase[:int(len(phrase) * RNG.uniform(0.35, 0.68))]
             add(compose_window(cut, bank), 0, gid)
+        # NOT done: "leaving" windows (phrase ended 0.9-1.8 s ago, tail at
+        # the window start) as negatives.  Tried as v7j against the double
+        # "ding" the owner heard: held-out human recall fell 83% -> 62%.
+        # The engine's re-arm hysteresis (kws.h KWS_REARM_THRESHOLD)
+        # handles the tail instead.
 
     for gj, m in enumerate(neg):
         x = load_wav(DATA / m["file"])
@@ -377,8 +386,12 @@ def main():
             else:
                 seg = x
             if real:
+                # SNR down to 0 dB: the owner's far positives sit ~7 dB
+                # over the floor, and with real negatives never below
+                # 10 dB the model learned "faint speech = wake" (v7g:
+                # 12 false wakes/h on distant conversation)
                 w = compose_window(seg, bank, end_back_s=(0.0, 0.6),
-                                   reverb_p=0.15, snr_db=(10.0, 40.0))
+                                   reverb_p=0.15, snr_db=(0.0, 30.0))
             else:
                 w = compose_window(seg, bank, end_back_s=(0.0, 0.6))
             feat = add(w, 0, gid)
