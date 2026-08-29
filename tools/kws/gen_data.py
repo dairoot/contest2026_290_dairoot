@@ -33,6 +33,21 @@ POS_TEXTS = [
     "你好！OpenVela。",
 ]
 
+# round-7: how Mandarin speakers actually say the brand word.  A zh voice
+# reads Latin "openvela" with English letter-to-sound rules (/v/, reduced
+# vowels, stress-timed); a person says 欧朋维拉 — no /v/, four even
+# syllables — or a mix.  Kept in a separate list so the draw sequence (and
+# so the file names) of the original corpus above is untouched.
+POS_TEXTS_EXTRA = [
+    "你好，欧朋维拉。",
+    "你好，欧喷维拉。",
+    "你好，欧盆维拉。",
+    "你好，欧本维拉。",
+    "你好，open维拉。",
+    "你好，噢喷薇拉。",
+    "你好。欧朋维拉。",       # full stop: the long pause a hesitant user makes
+]
+
 # Voices: mainland + regional + TW/HK for accent diversity
 VOICES = [
     "zh-CN-XiaoxiaoNeural", "zh-CN-XiaoyiNeural", "zh-CN-YunjianNeural",
@@ -82,7 +97,21 @@ NEG_TEXTS = [
     "这首歌是谁唱的？", "周五下午做代码评审。", "打印机没纸了。",
     "空调温度调低两度。", "会议室换到三零二。", "网速今天特别慢。",
     "你说什么我没听清。", "现在开始播报新闻。", "欢迎收听今天的节目。",
+    # round-7: real-world confusables — other assistants' wake words, 你好
+    # openers (real speech has lots of 你好你好), and the brand word
+    # without 你好 (must not fire on its own).  Appended at the END so the
+    # per-sentence draws above keep their file names.
+    "你好，小爱同学。", "小爱同学。", "小度小度。", "天猫精灵。", "你好，小艺。",
+    "嗨，小问。", "你好，问问。", "你好，米雅。", "小布小布。", "你好你好。",
+    "你好，请问一下。", "你好，我想问一下。", "喂，你好。", "你好呀，在吗？",
+    "欧朋维拉。", "欧喷维拉。", "你好，欧朋。",
 ]
+
+# Kept in the list (indices are baked into file names) but excluded from
+# the manifest: a slow "你好，欧朋维拉" runs past the 2.0 s window, so the
+# streaming positive IS the head-clipped "…欧朋维拉" — labeling the bare
+# brand word negative would fight that.  Nobody says it without 你好.
+NEG_SKIP = {"欧朋维拉。", "欧喷维拉。"}
 
 CONCURRENCY = 6
 
@@ -167,14 +196,36 @@ async def main():
             ri = int(rng.integers(1, 4))
             name = f"neg_s{si:03d}_v{vi:02d}.wav"
             out = DATA / "neg_raw" / name
+            if text in NEG_SKIP:
+                continue
             manifest.append({"file": f"neg_raw/{name}", "label": 0,
                              "voice": VOICES[vi], "text": text})
             if not out.exists():
                 jobs.append(tts_one(text, VOICES[vi], RATES[ri], "+0Hz",
                                     out, sem))
 
+    # round-7 positives (Mandarin renderings): own RNG so nothing above
+    # changes; 3 random prosody picks + neutral per voice x text
+    rng2 = np.random.default_rng(20260829)
+    for vi, voice in enumerate(VOICES):
+        for tj, text in enumerate(POS_TEXTS_EXTRA):
+            ti = len(POS_TEXTS) + tj
+            picks = {(rng2.integers(len(RATES)), rng2.integers(len(PITCHES)))
+                     for _ in range(3)}
+            picks.add((2, 1))
+            for ri, pi in picks:
+                name = f"pos_v{vi:02d}_t{ti}_r{ri}_p{pi}.wav"
+                out = DATA / "pos_raw" / name
+                manifest.append({"file": f"pos_raw/{name}", "label": 1,
+                                 "voice": voice, "text": text})
+                if not out.exists():
+                    jobs.append(tts_one(text, voice, RATES[ri], PITCHES[pi],
+                                        out, sem))
+
     print(f"{len(jobs)} clips to synthesize "
           f"({len(manifest)} total in manifest)")
+    if "--dry" in sys.argv:            # just report; keep manifest.json
+        return
     results = await asyncio.gather(*jobs)
     ok = sum(1 for r in results if r)
     print(f"done: {ok}/{len(jobs)} new clips OK")

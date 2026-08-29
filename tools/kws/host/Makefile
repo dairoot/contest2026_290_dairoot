@@ -7,7 +7,9 @@
 
 BOARD := ../../../board/contest_board/src
 SDKGCC := $(HOME)/rk3576-sdk/rk3576-linux/prebuilts/gcc/linux-x86/aarch64/gcc-arm-10.3-2021.07-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc
-CC ?= $(SDKGCC)
+# plain "=" — "?=" never fires because GNU make predefines CC=cc, and the
+# resulting x86 binary only shows up as "Exec format error" on the board
+CC = $(SDKGCC)
 STATIC ?= -static
 # Warmup suppresses the first 10 s after init to mask the Linux boot-time
 # speaker pops (see kws.h).  The eval clips are shorter than that, so with

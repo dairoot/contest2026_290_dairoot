@@ -110,6 +110,34 @@ def speed_warp(x, s):
     return resample_poly(x, p, 100).astype(np.float32)
 
 
+def vary_pause(phrase):
+    """Re-time the pause between 你好 and openvela (clean TTS only).
+
+    edge-tts renders a comma as ~0.2 s, every time.  People pause anywhere
+    from nothing to half a second, and the model must not learn the TTS
+    timing as part of the keyword.  Finds the quietest 20 ms in the middle
+    of the phrase and inserts up to 0.35 s of floor-level noise there, or
+    removes up to 0.15 s around it when that span is already quiet.
+    """
+    hop = SR // 50
+    n = len(phrase) // hop
+    if n < 20:
+        return phrase
+    rms = np.sqrt((phrase[:n * hop].reshape(n, hop) ** 2).mean(axis=1))
+    lo, hi = int(n * 0.25), int(n * 0.65)
+    k = lo + int(np.argmin(rms[lo:hi]))
+    d = RNG.uniform(-0.15, 0.35)
+    if d >= 0:
+        floor = max(float(rms[k]), 1e-4)
+        gap = RNG.standard_normal(int(d * SR)).astype(np.float32) * floor
+        return np.concatenate([phrase[:k * hop], gap, phrase[k * hop:]])
+    half = int(-d * SR / 2) // hop
+    a, b = max(0, k - half), min(n, k + half + 1)
+    if rms[a:b].max() < rms.max() * 10 ** (-25 / 20):   # only cut quiet
+        return np.concatenate([phrase[:a * hop], phrase[b * hop:]])
+    return phrase
+
+
 def pink_noise(n):
     w = RNG.standard_normal(n // 2 + 1) + 1j * RNG.standard_normal(n // 2 + 1)
     f = np.arange(len(w)) + 1.0
@@ -123,6 +151,8 @@ class NoiseBank:
         self.room = []
         for p in sorted((DATA / "noise_raw").glob("*.wav")) \
                 if (DATA / "noise_raw").is_dir() else []:
+            if p.stem.endswith("_test"):      # held out for eval_suite.py
+                continue
             try:
                 self.room.append(load_wav(p))
             except Exception:
@@ -139,8 +169,12 @@ class NoiseBank:
         return out / 6.0
 
     def sample(self, n, kind=None):
-        kinds = ["white", "pink", "babble"] + (["room"] if self.room else [])
-        kind = kind or kinds[RNG.integers(len(kinds))]
+        if kind is None:
+            if self.room:      # the real PDM floor is what the board hears
+                kind = RNG.choice(["white", "pink", "babble", "room"],
+                                  p=[0.15, 0.15, 0.25, 0.45])
+            else:
+                kind = RNG.choice(["white", "pink", "babble"])
         if kind == "white":
             return RNG.standard_normal(n).astype(np.float32) * 0.3, kind
         if kind == "pink":
@@ -194,12 +228,29 @@ def synth_rir():
 
 
 def compose_window(phrase, bank, end_back_s=(0.0, 0.40), reverb_p=0.35,
-                   snr_db=(5.0, 25.0), noise_p=0.75):
-    """Place `phrase` into a WS window over a noise bed; returns int16."""
+                   snr_db=(5.0, 35.0), noise_p=1.0):
+    """Place `phrase` into a WS window over a noise bed; returns int16.
+
+    Every window gets a noise bed: a live stream never contains digital
+    silence, and log(eps) frames make windows the board can never produce
+    (the v6 recipe left 25% of windows with an all-zero floor).
+    """
     win = np.zeros(WS, dtype=np.float32)
     if phrase is not None and len(phrase):
-        if len(phrase) > WS - int(0.35 * SR):
-            phrase = speed_warp(phrase, len(phrase) / (WS - int(0.4 * SR)))
+        limit = WS - int(0.35 * SR)                       # 1.665 s
+        if len(phrase) > limit:
+            # Real speakers stretch the phrase past the 2.0 s window (the
+            # Mandarin 欧朋维拉 renderings run 2.0-2.3 s); v6 squeezed
+            # anything longer than 1.67 s down to 1.6 s, so the model never
+            # saw a phrase filling the window.  Now: half the time keep the
+            # natural pace and let placement clip the head (<= 0.5 s: what
+            # the board sees the moment a slow phrase ends), else rescale
+            # to a random length that still nearly fills the window.
+            if len(phrase) <= WS + int(0.30 * SR) and RNG.random() < 0.5:
+                end_back_s = (0.0, 0.20)
+            else:
+                target = RNG.uniform(1.60, 1.95) * SR
+                phrase = speed_warp(phrase, len(phrase) / target)
         end = WS - int(RNG.uniform(*end_back_s) * SR)
         a = max(0, end - len(phrase))
         seg = phrase[max(0, len(phrase) - end):]
@@ -225,10 +276,11 @@ def compose_window(phrase, bank, end_back_s=(0.0, 0.40), reverb_p=0.35,
 
 def main():
     manifest = json.loads((DATA / "manifest.json").read_text())
-    extra = DATA / "manifest_rerec.json"
-    if extra.exists():
-        manifest += json.loads(extra.read_text())
-        print("including re-recorded corpus")
+    for extra in ("manifest_rerec.json", "manifest_say.json",
+                  "manifest_real.json"):
+        if (DATA / extra).exists():
+            manifest += json.loads((DATA / extra).read_text())
+            print(f"including {extra}")
     manifest = [m for m in manifest if (DATA / m["file"]).exists()]
     pos = [m for m in manifest if m["label"] == 1]
     neg = [m for m in manifest if m["label"] == 0]
@@ -254,41 +306,87 @@ def main():
         x = load_wav(DATA / m["file"])
         if m.get("voice") == "board-channel":
             stem = Path(m["file"]).stem[len("rerec_"):]
-            orig = load_wav(DATA / "pos_raw" / f"{stem}.wav")
+            orig = load_wav(DATA / m.get("orig", f"pos_raw/{stem}.wav"))
             phrase = extract_rerec_phrase(x, orig)
             if phrase is None:
                 continue
             rerec_durs.append(len(phrase) / SR)
+        elif m.get("voice") == "human-pdm":
+            # a take off the PDM mic, already cut to the utterance (ASR
+            # segmentation or record_real.py): speech sits only 7-12 dB
+            # over the floor, an energy gate would keep the whole clip
+            phrase = x
         else:
             phrase = trim_silence(x)
         if len(phrase) < 0.4 * SR:
             continue
-        for v in range(POS_VARIANTS):
-            s = RNG.uniform(0.9, 1.12)
-            w = compose_window(speed_warp(phrase, s), bank)
+        human = m.get("voice") == "human-pdm"
+        clean = not human and m.get("voice") != "board-channel"
+        # The handful of human takes are the only positives from the real
+        # world: oversample them (x24; x48 made the owner's room floor and
+        # voice a wake cue on their own), and go easy on the synthetic
+        # noise (they carry the real floor already)
+        nvar = POS_VARIANTS * 3 if human else POS_VARIANTS
+        for v in range(nvar):
+            # up to 1.35x faster: the owner's quick takes run 0.8-1.0 s for
+            # the whole phrase, below anything a 1.15x-warped TTS clip gave
+            s = RNG.uniform(0.85, 1.35)
+            p = vary_pause(phrase) if clean and RNG.random() < 0.5 else phrase
+            if human:
+                w = compose_window(speed_warp(p, s), bank, reverb_p=0.15,
+                                   snr_db=(12.0, 40.0))
+            else:
+                w = compose_window(speed_warp(p, s), bank)
             feat = add(w, 1, gid)
             if "pos" not in golden and gi % 17 == 3 and v == 0:
                 golden["pos"] = (w, feat)
-        if RNG.random() < 0.45:   # truncated phrase = hard negative
-            cut = phrase[:int(len(phrase) * RNG.uniform(0.45, 0.65))]
+        # truncated phrase = hard negative.  v7a fired on "你好，欧朋" at
+        # 0.99: cut every clip, twice, anywhere from 你好 alone to one
+        # syllable short of the end — only the complete phrase may fire
+        for _ in range(2):
+            cut = phrase[:int(len(phrase) * RNG.uniform(0.35, 0.68))]
             add(compose_window(cut, bank), 0, gid)
 
     for gj, m in enumerate(neg):
         x = load_wav(DATA / m["file"])
         gid = clip_group(m)
-        for v in range(NEG_VARIANTS):
+        real = m.get("voice") in ("real-mic", "human-pdm")
+        text = m.get("text", "")
+        hard = text.startswith(("你好", "您好", "喂")) or \
+            any(k in text for k in ("维拉", "薇拉", "欧朋", "欧维"))
+        if m.get("voice") == "human-pdm":
+            # the owner's own non-wake speech, bare "openvela", room
+            # floor and knocks: the counterweight to the oversampled
+            # human positives (same voice, same floor, label 0)
+            nvar = 8
+        elif real:
+            # real recordings already carry a room and a floor: little
+            # extra reverb, gentler noise; long ones (meetings, TV) yield
+            # more crops
+            nvar = min(12, 2 + int(len(x) / SR / 1.5))
+        elif hard:
+            # 你好-openers and brand-word confusables: v7a still fired on
+            # 你好呀在吗 / 你好，维拉 at 0.98 with 4 variants
+            nvar = 2 * NEG_VARIANTS
+        else:
+            nvar = NEG_VARIANTS
+        for v in range(nvar):
             if len(x) > WS:
                 o = RNG.integers(0, len(x) - WS + 1)
                 seg = x[o:o + WS].copy()
             else:
                 seg = x
-            w = compose_window(seg, bank, end_back_s=(0.0, 0.6))
+            if real:
+                w = compose_window(seg, bank, end_back_s=(0.0, 0.6),
+                                   reverb_p=0.15, snr_db=(10.0, 40.0))
+            else:
+                w = compose_window(seg, bank, end_back_s=(0.0, 0.6))
             feat = add(w, 0, gid)
             if "neg" not in golden and gj % 13 == 5 and v == 0:
                 golden["neg"] = (w, feat)
 
     for k in range(NOISE_WINDOWS):
-        w = compose_window(None, bank, noise_p=0.85)
+        w = compose_window(None, bank)
         add(w, 0, 200000 + k)
 
     for k in range(TONAL_WINDOWS):
