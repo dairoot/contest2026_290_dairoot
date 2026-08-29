@@ -128,8 +128,10 @@ static int16_t *read_wav(const char *path, long *n_out)
 
 static void stream(const int16_t *pcm, long n)
 {
-  static const int16_t silence[CHUNK];
+  int16_t tail[CHUNK];
+  uint32_t lcg = 12345;
   long i;
+  int k;
 
   for (i = 0; i < n; i += CHUNK)
     {
@@ -141,13 +143,22 @@ static void stream(const int16_t *pcm, long n)
 
   /* A real microphone keeps running after the phrase; without this tail
    * the score smoother never gets its post-phrase inferences and late
-   * detections are lost at end-of-file.
+   * detections are lost at end-of-file.  The tail is a -50 dBFS
+   * pseudo-random floor, not digital zeros: a PDM mic never produces
+   * zeros, and log(eps) frames inside the CMN window are an input the
+   * v7 recipe deliberately never trains on.
    */
 
   for (i = 0; i < (long)(KWS_SR * 6 / 10); i += CHUNK)
     {
+      for (k = 0; k < CHUNK; k++)
+        {
+          lcg = lcg * 1664525u + 1013904223u;
+          tail[k] = (int16_t)((int)(lcg >> 24) - 128);
+        }
+
       g_now_t = (double)(n + i) / KWS_SR;
-      kws_engine_push(silence, CHUNK);
+      kws_engine_push(tail, CHUNK);
     }
 }
 

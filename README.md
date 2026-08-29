@@ -16,7 +16,8 @@
   log-mel + DS-CNN（纯 C，仅依赖 libm）在小核上每 80ms 推理一次（实测单次
   53ms），检出后经 rpmsg 通知 Linux（`KEY_WAKEUP` input 事件）——大核可睡、
   小核常听的 AMP 语音入口。训练语料经板载扬声器→真实 PDM 麦重录做信道
-  自适应。训练/评测/部署全管线见 [`tools/kws/`](tools/kws/)
+  自适应，板麦录到的真人对话/底噪作负例参训（v7：真人语音误触 8%→0.4%，
+  底噪 120 次/小时→0）。训练/评测/部署全管线见 [`tools/kws/`](tools/kws/)
 - **Linux 侧接力做识别**：唤醒之后，Linux 的 7 个核与 **6 TOPS NPU** 承担实时语音
   识别（SenseVoiceSmall）与说话人辨认（ERes2NetV2），两个模型都转成 RKNN 跑在 NPU
   上——声纹 4589 ms → **519 ms**，识别 702 ms → **378 ms**，端到端「说完到出结果」
