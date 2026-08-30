@@ -1,0 +1,34 @@
+[project]
+name = "camera-server"
+version = "0.1.0"
+description = "小米摄像头视频流：RK3576 VPU 硬解 + yolo11n 跑 NPU，MJPEG 推到浏览器"
+requires-python = ">=3.12"
+dependencies = [
+    # 拉小米摄像头的 HEVC 码流。不在 PyPI 上，见下面的 tool.uv.sources。
+    "miloco-sdk",
+    # MJPEG 的 web 服务。
+    "aiohttp>=3.8",
+    # 没有 VPU 时回退的 HEVC 软解。
+    "av>=10",
+    "numpy>=1.24",
+    "opencv-python>=4.8",
+    # 板子上的 NPU 推理运行时，只有 aarch64 Linux 有包。yolo11n_int8.rknn 的转换
+    # 用 rknn-toolkit2（板子上直接转，不进这里的依赖）。
+    "rknn-toolkit-lite2>=2.3.2 ; platform_machine == 'aarch64' and sys_platform == 'linux'",
+    # NPU 不可用时 web.py 回退到 ultralytics。板子是 ARMv8.0，PyPI 的 torch
+    # aarch64 wheel 按 ARMv8.2+ 编，一跑卷积就 SIGILL，所以那边不装。
+    "ultralytics>=8.3 ; platform_machine != 'aarch64'",
+]
+
+# 两个模块平铺在本目录，以本目录为工作目录直接 uv run，不需要把自身装进环境。
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+miloco-sdk = { git = "https://github.com/dairoot/miloco-sdk.git" }
+
+# VPU 硬解走 GStreamer 的 mppvideodec/mppjpegenc，Python 绑定是板子上系统的
+# python3-gi（apt 装的 gstreamer1.0-rockchip1 + python3-gi），pip 里装不出来，
+# 所以建 venv 时要放行系统包：
+#     uv venv --python 3.12 --system-site-packages && uv sync
+# 没放行时 web.py 会自动回退到 PyAV 软解，1080p 下会卡。
