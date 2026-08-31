@@ -1,0 +1,27 @@
+{
+  "tts_engine": "edge",
+  "mic": "openvela AMP mic: microphone (hw:3,0)",
+  "send_idle_farewell": false,
+  "tool_thinking": false,
+  "timezone": 8,
+  "city": "深圳",
+  "soul": "你是一个智能助手，擅长回答各种问题，提供信息，解决问题，并能根据用户需求提供相应的帮助。",
+  "aichat_tools": {
+    "play_music": true,
+    "query_joke": true,
+    "query_weather": true,
+    "web_search": true
+  },
+  "skills": {},
+  "mcp": {
+    "mcpServers": {
+      "fetch": {
+        "command": "/home/kickpi/src/aichat_sdk/.venv/bin/python3",
+        "args": [
+          "-m",
+          "mcp_server_fetch"
+        ]
+      }
+    }
+  }
+}

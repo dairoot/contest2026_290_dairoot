@@ -1,0 +1,957 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChatBot 配置台</title>
+<style>
+:root {
+  --bg:#f4f6f8; --card:#fff; --fg:#1b1e23; --muted:#6b7280; --line:#e2e6ea;
+  --accent:#2563eb; --ok:#16a34a; --warn:#c2740a; --err:#dc2626;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#15171a; --card:#1d2024; --fg:#e6e8eb; --muted:#9aa1a9; --line:#2c3036;
+    --accent:#4b8bf5; --ok:#4ade80; --warn:#f0b45e; --err:#f87171;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--fg);
+  font:14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+header {
+  position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:12px;
+  padding:12px 18px; background:var(--card); border-bottom:1px solid var(--line);
+}
+h1 { font-size:15px; margin:0; }
+h2 { font-size:13px; margin:0 0 12px; display:flex; align-items:center; gap:8px; }
+main { display:grid; grid-template-columns:400px minmax(0,1fr); gap:16px; padding:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+.chat, .config { display:flex; flex-direction:column; height:calc(100vh - 92px); }
+.config { padding:0; }  /* 内边距交给可滚动的 config-body，操作条才能贴住卡片底边 */
+.config-body { flex:1; overflow-y:auto; padding:16px; }
+@media (max-width:900px) {  /* 单列时左栏不再限高，跟着页面滚 */
+  main { grid-template-columns:1fr; }
+  .config { height:auto; }
+  .config-body { overflow:visible; }
+  .actions { position:sticky; bottom:0; }
+}
+.badge { font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
+.badge.ok { color:var(--ok); border-color:var(--ok); }
+.badge.busy { color:var(--accent); border-color:var(--accent); }
+.badge.warn { color:var(--warn); border-color:var(--warn); }
+.badge.err { color:var(--err); border-color:var(--err); }
+.hint { color:var(--muted); font-size:12px; margin-bottom:14px; }
+label { display:block; margin-bottom:12px; }
+label > span { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
+label.check { display:flex; align-items:center; gap:8px; font-size:13px; }
+label.check input { width:auto; }
+.group-body > label:last-child { margin-bottom:0; }
+input, select, textarea {
+  width:100%; font:inherit; color:var(--fg); background:var(--bg);
+  border:1px solid var(--line); border-radius:8px; padding:7px 9px;
+}
+input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+textarea { resize:vertical; }
+textarea.mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12.5px; line-height:1.5; }
+.row { display:grid; grid-template-columns:1fr 110px; gap:10px; }
+.group + .group { border-top:1px solid var(--line); margin-top:14px; padding-top:14px; }
+.group-head {  /* 负 margin 配 padding：hover 底色外扩一圈，布局位置不变 */
+  display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;
+  margin:-4px -6px 12px; padding:4px 6px; border-radius:6px;
+}
+.group-head:hover { background:var(--bg); }
+.group-head h2 { margin:0 auto 0 0; }
+.group-arrow { flex:none; width:9px; font-size:9px; color:var(--muted); transition:transform .15s; }
+.group.open .group-arrow { transform:rotate(90deg); }
+.group:not(.open) .group-body { display:none; }
+.group:not(.open) .group-head { margin-bottom:-4px; }
+.count { color:var(--muted); font-weight:400; }
+.search { margin-bottom:8px; }
+button.link { border:0; background:none; color:var(--accent); font-size:12px; padding:2px 0; cursor:pointer; }
+.mcp-list {  /* server / 技能一多就自己滚，别把配置区撑长；x 轴仍旧裁掉，保持原来的行为 */
+  border:1px solid var(--line); border-radius:8px;
+  max-height:38vh; overflow-y:auto; overflow-x:hidden;
+}
+.mcp-empty { font-size:12px; color:var(--muted); padding:10px; text-align:center; }
+.mcp-row { border-top:1px solid var(--line); }
+#mcp-defaults .mcp-row:first-child { border-top:0; }
+.mcp-lock { flex:none; width:13px; }  /* 只读行没有勾选框，占位对齐 */
+.mcp-row.off .mcp-summary { opacity:.5; }
+.mcp-summary { display:flex; align-items:center; gap:8px; padding:7px 9px; cursor:pointer; }
+.mcp-summary:hover { background:var(--bg); }
+.mcp-summary input[type=checkbox] { width:13px; height:13px; margin:0; flex:none; }
+.mcp-arrow { flex:none; width:9px; font-size:9px; color:var(--muted); transition:transform .15s; }
+.mcp-row.open .mcp-arrow { transform:rotate(90deg); }
+.mcp-name {
+  flex:1; min-width:0; width:auto; font-weight:600; padding:2px 5px;
+  background:none; border:1px solid transparent;  /* 平时像文字，点了才是输入框 */
+}
+input.mcp-name:hover { border-color:var(--line); }
+input.mcp-name:focus { background:var(--bg); border-color:var(--line); }
+.mcp-type { flex:none; font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:4px; padding:0 5px; }
+.mcp-state { flex:none; font-size:12px; color:var(--muted); white-space:nowrap; }
+.mcp-state.ok { color:var(--ok); }
+.mcp-state.err { color:var(--err); }
+.mcp-body { display:none; padding:0 9px 10px 26px; }
+.mcp-row.open .mcp-body { display:block; }
+.mcp-target {  /* 命令行常常很长，用文本域按内容撑高，别截断 */
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12.5px;
+  line-height:1.5; resize:none; overflow:hidden;
+}
+.mcp-error { font-size:12px; color:var(--err); word-break:break-all; margin-top:6px; }
+.mcp-error:empty { display:none; }
+.mcp-tools { display:flex; flex-direction:column; gap:5px; margin-top:6px; }
+.mcp-tools:empty { display:none; }
+.mcp-tool {
+  font-size:11.5px; background:var(--bg); border:1px solid var(--line);
+  border-radius:5px; padding:3px 7px; cursor:default;
+}
+.mcp-tool-name { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+.mcp-tool-head { display:flex; align-items:center; gap:6px; }
+.mcp-tool-head .mcp-tool-enabled { width:12px; height:12px; margin:0; flex:none; }
+.mcp-tool-desc { color:var(--muted); line-height:1.5; margin-top:2px; }
+.mcp-tool-desc:empty { display:none; }
+#skill-rows .mcp-row.first { border-top:0; }
+.skill-desc { font-size:12px; color:var(--muted); line-height:1.6; }
+.skill-path {
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px;
+  color:var(--muted); word-break:break-all; margin-top:6px;
+}
+.mcp-del { display:block; margin:8px 0 0 auto; border:0; background:none; color:var(--muted); font-size:12px; cursor:pointer; }
+.mcp-del:hover { color:var(--err); }
+.actions {  /* 配置区自己滚动，操作条常驻卡片底边 */
+  display:flex; align-items:center; gap:10px; flex:none;
+  padding:12px 16px; background:var(--card);
+  border-top:1px solid var(--line); border-radius:0 0 10px 10px;
+}
+button {
+  font:inherit; padding:7px 14px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--line); background:var(--card); color:var(--fg);
+}
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+button:disabled { opacity:.5; cursor:default; }
+.note { font-size:12px; }
+.note.ok { color:var(--ok); }
+.note.err { color:var(--err); }
+.banner { font-size:12.5px; padding:8px 10px; border-radius:8px; margin-bottom:12px; border:1px solid; }
+.banner.warn { color:var(--warn); border-color:var(--warn); }
+.banner.err { color:var(--err); border-color:var(--err); }
+#msg-count { color:var(--muted); font-weight:400; }
+#restart { margin-left:auto; padding:4px 10px; font-size:12px; }
+#messages { flex:1; overflow-y:auto; padding-right:4px; }
+.msg { border-left:3px solid var(--line); padding:2px 0 8px 10px; margin-bottom:12px; }
+.msg.user { border-color:var(--accent); }
+.msg.assistant { border-color:var(--ok); }
+.msg.tool { border-color:var(--warn); }
+.msg .head { display:flex; gap:8px; align-items:baseline; }
+.msg .role { font-size:12px; font-weight:600; color:var(--muted); }
+.msg.user .role { color:var(--accent); }
+.msg.assistant .role { color:var(--ok); }
+.msg.tool .role { color:var(--warn); }
+.msg .meta { font-size:12px; color:var(--muted); }
+.body { white-space:pre-wrap; word-break:break-word; margin-top:2px; }
+.voice {  /* 用户这句话的录音：文字前面的小胶囊，点了播/暂停，背景从左往右填充当进度 */
+  display:inline-flex; align-items:center; gap:5px; vertical-align:middle; margin-right:8px;
+  font-size:12px; line-height:18px; color:var(--muted); padding:0 8px 0 7px; cursor:pointer; user-select:none;
+  border:1px solid var(--line); border-radius:99px;
+  background:linear-gradient(to right, color-mix(in srgb, var(--accent) 18%, transparent) var(--p, 0%), transparent 0);
+}
+.voice:hover, .voice.playing { color:var(--accent); border-color:var(--accent); }
+.voice svg { width:9px; height:9px; fill:currentColor; }
+.voice .pause, .voice.playing .play { display:none; }
+.voice.playing .pause { display:block; }
+.voice.err { cursor:default; color:var(--err); border-color:var(--err); }
+.instructions {  /* user JSON 里的 response_instructions：给模型的回复要求，不是用户说的话 */
+  font-size:12.5px; color:var(--muted); margin-top:4px;
+  white-space:pre-wrap; word-break:break-word;
+}
+details pre {
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12.5px;
+  background:var(--bg); border-radius:6px; padding:8px; max-height:15em; overflow:auto;
+  white-space:pre-wrap; word-break:break-word; margin:4px 0 0;
+}
+.toolcall {  /* 一个调用占一行，超出部分省略 */
+  font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12.5px;
+  color:var(--muted); margin-top:4px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+details summary { cursor:pointer; color:var(--muted); font-size:12.5px; }
+details.thinking pre { color:var(--muted); }
+.msg.compressed { opacity:.55; }  /* 已进摘要的消息压暗：原文还在 llm.messages，只是不再发给模型 */
+.compress-divider { margin:0 0 12px; padding:7px 10px; border:1px dashed var(--warn); border-radius:8px; }
+.compress-divider summary { color:var(--warn); }
+.empty { color:var(--muted); font-size:13px; padding:8px 0; }
+.composer { display:flex; gap:8px; align-items:flex-end; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+.composer textarea { flex:1; resize:none; }
+.composer button { flex:none; }
+#send-note { font-size:12px; margin-top:6px; min-height:1.6em; }
+#send-note.err { color:var(--err); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ChatBot 配置台</h1>
+  <div id="badges" style="display:flex; gap:6px;"></div>
+</header>
+
+<main>
+  <section class="card config">
+    <div class="config-body">
+
+      <section class="group open">
+        <div class="group-head"><span class="group-arrow">▶</span><h2>基础设置</h2></div>
+        <div class="group-body">
+          <label><span>TTS 引擎</span>
+            <select id="tts_engine">
+              <option value="bytedance">bytedance（豆包 v2，24k）</option>
+              <option value="v3">v3（豆包 v3，24k）</option>
+              <option value="edge">edge（微软在线，24k）</option>
+            </select>
+          </label>
+
+          <label><span>麦克风</span>
+            <select id="mic"></select>
+          </label>
+
+          <div class="row">
+            <label><span>城市</span><input id="city" placeholder="深圳"></label>
+            <label><span>时区</span><input id="timezone" type="number" step="0.5"></label>
+          </div>
+
+          <label class="check"><input type="checkbox" id="send_idle_farewell">空闲超时先说一句告别语</label>
+          <label class="check"><input type="checkbox" id="tool_thinking">调用工具后开启思考模式</label>
+
+          <label><span>角色人设 soul</span><textarea id="soul" rows="6"></textarea></label>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="group-head">
+          <span class="group-arrow">▶</span>
+          <h2>MCP servers<span id="mcp-count" class="count"></span></h2>
+          <button type="button" id="mcp-add" class="link">+ 添加</button>
+          <button type="button" id="mcp-mode" class="link">JSON 模式</button>
+        </div>
+        <div class="group-body">
+          <div class="mcp-list" id="mcp-list">
+            <div id="mcp-defaults"></div>
+            <div id="mcp-rows"></div>
+            <div id="mcp-empty" class="mcp-empty" hidden>还没有 MCP server</div>
+          </div>
+          <textarea id="mcp-json" rows="8" class="mono" spellcheck="false" hidden></textarea>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="group-head">
+          <span class="group-arrow">▶</span>
+          <h2 id="skill-title">Skills<span id="skill-count" class="count"></span></h2>
+        </div>
+        <div class="group-body">
+          <input id="skill-search" class="search" placeholder="过滤技能…" spellcheck="false" hidden>
+          <div class="mcp-list" id="skill-list">
+            <div id="skill-rows"></div>
+            <div id="skill-empty" class="mcp-empty" hidden></div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <div class="actions">
+      <button id="save" class="primary">保存并重启</button>
+      <span id="note" class="note"></span>
+    </div>
+  </section>
+
+  <section class="card chat">
+    <h2>聊天信息 <span id="msg-count"></span><button id="restart">重新开始</button></h2>
+    <div id="banner" class="banner" hidden></div>
+    <div id="messages"></div>
+    <div class="composer">
+      <textarea id="send-text" rows="2" placeholder="打字发给它（等同说话，Enter 发送，Shift+Enter 换行）"></textarea>
+      <button id="send" class="primary">发送</button>
+    </div>
+    <div id="send-note"></div>
+  </section>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const ROLE_LABEL = { system: "系统", user: "用户", assistant: "助手", tool: "工具" };
+let lastSig = null;      // 消息没变就不重画，免得看到一半被刷掉
+let systemOpen = false;  // 系统提示词的展开状态自己记着，重画后还原
+let compressOpen = false;  // 压缩摘要折叠块的展开状态，同上
+let jsonMode = false;    // MCP 配置的两种编辑方式：一行一个 server / 整段 JSON
+let skillsSig = null;    // 技能列表每秒轮一次，没变就不重建（重建会把展开的行收起来）
+let skillsDir = "";      // 技能目录，空态文案要用
+let busy = false;
+let sending = false;  // 发文本时禁用发送按钮，别连点发出重复的两句
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+// ---------------- 外部 MCP servers ----------------
+
+function splitCommand(line) {  // 够用的 shlex：按空白切，引号里的空格不切
+  const parts = [];
+  let cur = "", quote = null, started = false;
+  for (const ch of line.trim()) {
+    if (quote) { if (ch === quote) quote = null; else cur += ch; }
+    else if (ch === '"' || ch === "'") { quote = ch; started = true; }
+    else if (/\s/.test(ch)) { if (cur || started) { parts.push(cur); cur = ""; started = false; } }
+    else cur += ch;
+  }
+  if (cur || started) parts.push(cur);
+  return parts;
+}
+
+function joinCommand(parts) {
+  return parts.filter(Boolean).map((p) => (/\s/.test(p) ? JSON.stringify(p) : p)).join(" ");
+}
+
+function specToTarget(spec) {
+  if (typeof spec === "string") return spec;      // SDK 支持直接写命令行字符串
+  if (!spec || typeof spec !== "object") return "";
+  if (spec.url) return spec.url;
+  return joinCommand([spec.command || "", ...(spec.args || [])]);
+}
+
+function targetToSpec(target) {
+  if (/^https?:\/\//i.test(target)) return { url: target };
+  const [command = "", ...args] = splitCommand(target);
+  return { command, args };
+}
+
+function mcpExtras(spec) {  // env / cwd 这些页面上不编辑的字段原样留着，只能在 JSON 模式改
+  const extras = {};
+  if (spec && typeof spec === "object") {
+    for (const [key, value] of Object.entries(spec)) {
+      if (!["command", "args", "url", "enabled"].includes(key)) extras[key] = value;
+    }
+  }
+  return extras;
+}
+
+function addMcpRow(name, spec, open) {
+  const row = el("div", "mcp-row");
+  row.dataset.extras = JSON.stringify(mcpExtras(spec));
+
+  // 摘要行：勾选启用、展开箭头、名称、类型、状态
+  const enabled = el("input");
+  enabled.type = "checkbox";
+  enabled.className = "mcp-enabled";
+  enabled.title = "启用";
+  enabled.checked = !(spec && typeof spec === "object" && spec.enabled === false);
+
+  const arrow = el("span", "mcp-arrow", "▶");
+  const nameInput = el("input", "mcp-name");
+  nameInput.value = name || "";
+  nameInput.placeholder = "名称";
+  const type = el("span", "mcp-type");
+  const summary = el("div", "mcp-summary");
+  summary.append(enabled, arrow, nameInput, type, el("span", "mcp-state"));
+
+  // 详情：命令行、工具列表、失败原因、删除
+  const target = el("textarea", "mcp-target");
+  target.rows = 1;
+  target.spellcheck = false;
+  target.value = specToTarget(spec);
+  target.placeholder = "python -m mcp_server_fetch 或 http://127.0.0.1:8000/mcp";
+  const del = el("button", "mcp-del", "✕ 删除");
+  del.type = "button";
+  const body = el("div", "mcp-body");
+  body.append(target, el("div", "mcp-tools"), el("div", "mcp-error"), del);
+
+  const syncType = () => (type.textContent = /^https?:\/\//i.test(target.value.trim()) ? "http" : "stdio");
+  const syncOff = () => row.classList.toggle("off", !enabled.checked);
+  target.addEventListener("input", () => {
+    syncType();
+    setMcpRowOpen(row, true);  // 顺带按新内容重新撑高
+  });
+  enabled.addEventListener("change", syncOff);
+  del.addEventListener("click", () => {
+    row.remove();
+    updateMcpCount();
+  });
+  summary.addEventListener("click", (event) => {  // 点摘要行展开/收起，点勾选框和名称除外
+    if (event.target !== enabled && event.target !== nameInput) {
+      setMcpRowOpen(row, !row.classList.contains("open"));
+    }
+  });
+  syncType();
+  syncOff();
+
+  row.append(summary, body);
+  $("#mcp-rows").append(row);
+  setMcpRowOpen(row, !!open);
+  return row;
+}
+
+function setMcpRowOpen(row, open) {
+  row.classList.toggle("open", open);
+  const target = row.querySelector(".mcp-target");
+  if (!open || !target) return;  // 只读行只有工具列表，没有命令行
+  target.style.height = "auto";  // 收起状态 display:none 量不到高度，只在展开时算
+  const border = target.offsetHeight - target.clientHeight;  // border-box：height 得把上下边框算进去
+  target.style.height = target.scrollHeight + border + "px";
+}
+
+function renderMcpRows(mcp) {
+  $("#mcp-rows").replaceChildren();
+  for (const [name, spec] of Object.entries((mcp && mcp.mcpServers) || {})) addMcpRow(name, spec, false);
+  updateMcpCount();
+}
+
+function updateMcpCount() {
+  const external = document.querySelectorAll("#mcp-defaults .mcp-row, #mcp-rows .mcp-row").length;
+  $("#mcp-count").textContent = " · " + external;
+  $("#mcp-empty").hidden = external > 0;
+}
+
+function collectMcp() {
+  if (jsonMode) return $("#mcp-json").value;  // 原样交给服务端解析，报错信息统一
+  const servers = {};
+  for (const row of document.querySelectorAll("#mcp-rows .mcp-row")) {
+    const name = row.querySelector(".mcp-name").value.trim();
+    const target = row.querySelector(".mcp-target").value.trim();
+    if (!name && !target) continue;  // 整行空着的当没填
+    const spec = { ...JSON.parse(row.dataset.extras), ...targetToSpec(target) };
+    if (!row.querySelector(".mcp-enabled").checked) spec.enabled = false;
+    servers[name] = spec;
+  }
+  return { mcpServers: servers };
+}
+
+function renderMcpStatus(list) {
+  renderDefaultMcpRows(list.filter((item) => item.readonly));
+  const byName = Object.fromEntries(list.filter((item) => !item.readonly).map((item) => [item.name, item]));
+  for (const row of document.querySelectorAll("#mcp-rows .mcp-row")) {
+    const state = byName[row.querySelector(".mcp-name").value.trim()];
+    const badge = row.querySelector(".mcp-state");
+    const error = row.querySelector(".mcp-error");
+    badge.className = "mcp-state";
+    badge.removeAttribute("title");
+    error.textContent = "";
+    if (!row.querySelector(".mcp-enabled").checked) {
+      badge.textContent = "已停用";
+    } else if (!state) {
+      badge.textContent = "保存后生效";
+    } else if (state.error) {
+      badge.textContent = "连接失败";
+      badge.classList.add("err");
+      error.textContent = state.error;
+    } else if (state.connected) {
+      badge.textContent = state.tools.length ? state.tools.length + " 个工具" : "已连接";
+      badge.classList.add("ok");
+    } else {
+      badge.textContent = "未连接";
+    }
+    renderToolList(row, (state && state.tools) || []);
+    if (state && state.error && row.dataset.errorSeen !== state.error) {
+      row.dataset.errorSeen = state.error;  // 同一个错误只自动展开一次，收起来了就别再弹开
+      row.closest(".group").classList.add("open");  // 分区默认收着，得先弹开分区才量得到高度，也才看得见
+      setMcpRowOpen(row, true);
+    }
+  }
+}
+
+// SDK 默认注册、不在配置里的 server（如 aichat-tools）：只读展示连接状态和工具，不进 collectMcp；
+// 带 toggle 的行，工具列表里每个工具有启用勾选框，保存时收集成 aichat_tools 配置项提交
+let aichatTools = {};  // 开关的兜底值（{工具名: 是否启用}）：默认行是轮询建出来的，保存时可能还没建
+
+function collectAichatTools() {
+  const boxes = document.querySelectorAll("#mcp-defaults .mcp-tool-enabled");
+  if (!boxes.length) return aichatTools;  // 行还没建出来（首次轮询前）就用配置里的值
+  const map = {};
+  for (const box of boxes) map[box.dataset.tool] = box.checked;
+  return map;
+}
+
+function renderDefaultMcpRows(list) {
+  const existing = {};
+  for (const row of document.querySelectorAll("#mcp-defaults .mcp-row")) {
+    existing[row.dataset.name] = row;
+    if (!list.some((item) => item.name === row.dataset.name)) row.remove();
+  }
+  for (const item of list) {
+    const row = existing[item.name] || addDefaultMcpRow(item);
+    const badge = row.querySelector(".mcp-state");
+    const error = row.querySelector(".mcp-error");
+    badge.className = "mcp-state";
+    error.textContent = "";
+    const total = item.tools.length;
+    const enabled = item.tools.filter((tool) => tool.enabled !== false).length;
+    if (item.error) {
+      badge.textContent = "连接失败";
+      badge.classList.add("err");
+      error.textContent = item.error;
+    } else if (item.connected) {
+      badge.textContent = enabled === total ? total + " 个工具" : enabled + "/" + total + " 个工具";
+      badge.classList.add("ok");
+    } else {
+      badge.textContent = "未连接";
+    }
+    renderToolList(row, item.tools || []);
+  }
+  updateMcpCount();
+}
+
+function addDefaultMcpRow(item) {
+  const row = el("div", "mcp-row");
+  row.dataset.name = item.name;
+  if (item.toggle) row.dataset.toggle = "1";  // 工具列表里渲染每个工具的启用勾选框
+  const nameSpan = el("span", "mcp-name", item.name);
+  nameSpan.title = "SDK 自带工具的 MCP server，只读";
+  const summary = el("div", "mcp-summary");
+  summary.append(el("span", "mcp-lock"), el("span", "mcp-arrow", "▶"), nameSpan, el("span", "mcp-type", "默认"), el("span", "mcp-state"));
+  const body = el("div", "mcp-body");
+  body.append(el("div", "mcp-tools"), el("div", "mcp-error"));
+  summary.addEventListener("click", () => setMcpRowOpen(row, !row.classList.contains("open")));
+  row.append(summary, body);
+  $("#mcp-defaults").append(row);
+  return row;
+}
+
+function renderToolList(row, tools) {
+  const sig = JSON.stringify(tools);
+  if (row.dataset.toolsSig === sig) return;  // 每秒轮一次，没变就别重建
+  row.dataset.toolsSig = sig;
+  row.querySelector(".mcp-tools").replaceChildren(
+    ...tools.map((tool) => {
+      const item = el("div", "mcp-tool");
+      const name = el("div", "mcp-tool-name", tool.name || tool);  // 兼容旧版只给工具名的情况
+      if (row.dataset.toggle && tool.enabled !== undefined) {  // 自带工具：每个工具一个开关
+        const box = el("input");
+        box.type = "checkbox";
+        box.className = "mcp-tool-enabled";
+        box.title = "启用，保存后生效";
+        box.dataset.tool = tool.name;
+        box.checked = tool.enabled !== false;
+        const head = el("div", "mcp-tool-head");
+        head.append(box, name);
+        item.append(head);
+      } else {
+        item.append(name);
+      }
+      // 描述来自文档字符串，带换行和缩进，压成一段再显示
+      item.append(el("div", "mcp-tool-desc", (tool.description || "").replace(/\s+/g, " ").trim()));
+      return item;
+    })
+  );
+}
+
+// ---------------- skills ----------------
+// SKILLS_DIR 下扫出来的技能清单；每个技能一个启用勾选框，保存时收集成 skills 配置项提交，停用的不烘进系统提示词
+let skillToggles = {};  // 开关的兜底值（{技能名: 是否启用}）：行是轮询建出来的，保存时可能还没建
+
+function collectSkills() {
+  const boxes = document.querySelectorAll("#skill-rows .mcp-enabled");
+  if (!boxes.length) return skillToggles;  // 行还没建出来（首次轮询前）就用配置里的值
+  const map = {};
+  for (const box of boxes) map[box.dataset.skill] = box.checked;
+  return map;
+}
+
+function renderSkills(skills, dir) {
+  skillsDir = dir || "";
+  $("#skill-title").title = dir ? "技能目录：" + dir : "";
+  const enabled = skills.filter((skill) => skill.enabled !== false).length;
+  $("#skill-count").textContent = " · " + (enabled === skills.length ? skills.length : enabled + "/" + skills.length);
+  $("#skill-search").hidden = skills.length < 8;  // 就几个的时候搜索框纯占地方
+
+  const sig = JSON.stringify(skills);
+  if (sig !== skillsSig) {
+    skillsSig = sig;
+    $("#skill-rows").replaceChildren(...skills.map(renderSkillRow));
+  }
+  filterSkills();  // 重建过就得把过滤重新套上
+}
+
+function filterSkills() {
+  const query = $("#skill-search").hidden ? "" : $("#skill-search").value.trim().toLowerCase();
+  const rows = document.querySelectorAll("#skill-rows .mcp-row");
+  let shown = 0;
+  for (const row of rows) {
+    const hit = !query || row.dataset.search.includes(query);
+    row.hidden = !hit;
+    row.classList.toggle("first", hit && !shown);  // 第一个可见行才去掉顶边，免得跟容器边框叠成双线
+    if (hit) shown++;
+  }
+  const empty = $("#skill-empty");
+  empty.textContent = rows.length ? "没有匹配「" + query + "」的技能" : (skillsDir || "技能目录") + " 下还没有技能";
+  empty.hidden = shown > 0;
+}
+
+function renderSkillRow(skill) {
+  const row = el("div", "mcp-row");
+  row.dataset.search = (skill.name + " " + (skill.description || "")).toLowerCase();
+  const enabled = el("input");
+  enabled.type = "checkbox";
+  enabled.className = "mcp-enabled";
+  enabled.title = "启用，保存后生效";
+  enabled.dataset.skill = skill.name;
+  enabled.checked = skill.enabled !== false;
+  const summary = el("div", "mcp-summary");
+  summary.append(enabled, el("span", "mcp-arrow", "▶"), el("span", "mcp-name", skill.name));
+  const body = el("div", "mcp-body");
+  body.append(el("div", "skill-desc", skill.description || ""), el("div", "skill-path", skill.location || ""));
+  const syncOff = () => row.classList.toggle("off", !enabled.checked);
+  enabled.addEventListener("change", syncOff);
+  summary.addEventListener("click", (event) => {  // 点摘要行展开/收起，点勾选框除外
+    if (event.target !== enabled) row.classList.toggle("open");
+  });
+  syncOff();
+  row.append(summary, body);
+  return row;
+}
+
+// ---------------- 配置 ----------------
+
+function fillMicOptions(mics, current) {
+  const names = Array.isArray(mics) ? mics.slice() : [];
+  // 配的设备现在不在了（拔了/改名了）也留一条，不然下拉里选不中它，看着像没保存上
+  if (current && !names.includes(current)) names.push(current);
+  $("#mic").replaceChildren(...[["", "系统默认"], ...names.map((name) => [name, name])].map(([value, text]) => {
+    const option = el("option", "", text);
+    option.value = value;
+    return option;
+  }));
+  $("#mic").value = current;
+}
+
+function fillForm(cfg) {
+  $("#tts_engine").value = cfg.tts_engine || "bytedance";
+  fillMicOptions(cfg.mics, cfg.mic || "");
+  $("#city").value = cfg.city || "";
+  $("#timezone").value = cfg.timezone ?? 8;
+  $("#send_idle_farewell").checked = !!cfg.send_idle_farewell;
+  $("#tool_thinking").checked = !!cfg.tool_thinking;
+  $("#soul").value = cfg.soul || "";
+  aichatTools = cfg.aichat_tools && typeof cfg.aichat_tools === "object" ? cfg.aichat_tools : {};
+  skillToggles = cfg.skills && typeof cfg.skills === "object" ? cfg.skills : {};
+  renderMcpRows(cfg.mcp);
+  if (jsonMode) $("#mcp-json").value = JSON.stringify(cfg.mcp || { mcpServers: {} }, null, 2);
+}
+
+function formValues() {
+  return {
+    tts_engine: $("#tts_engine").value,
+    mic: $("#mic").value,
+    city: $("#city").value,
+    timezone: $("#timezone").value,
+    send_idle_farewell: $("#send_idle_farewell").checked,
+    tool_thinking: $("#tool_thinking").checked,
+    soul: $("#soul").value,
+    aichat_tools: collectAichatTools(),
+    skills: collectSkills(),
+    mcp: collectMcp(),
+  };
+}
+
+function setNote(text, ok) {
+  $("#note").textContent = text;
+  $("#note").className = "note " + (ok ? "ok" : "err");
+}
+
+async function post(url, body, okText) {
+  if (busy) return;
+  busy = true;
+  $("#save").disabled = $("#restart").disabled = true;
+  setNote("重启中…", true);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (data.config) fillForm(data.config);
+    setNote(data.ok ? okText : (data.error || "失败"), data.ok);
+  } catch (e) {
+    setNote(String(e), false);
+  } finally {
+    busy = false;
+    $("#save").disabled = $("#restart").disabled = false;
+    lastSig = null;
+    poll();
+  }
+}
+
+// ---------------- 状态 + 消息 ----------------
+
+function renderStatus(s) {
+  const badges = [];
+  if (s.restarting) badges.push(["重启中", "warn"]);
+  else if (!s.running) badges.push(["未启动", "err"]);
+  else if (s.session_closed) badges.push(["会话已结束", "warn"]);
+  else if (s.speaking) badges.push(["说话中", "busy"]);
+  else badges.push(["聆听中", "ok"]);
+  badges.push([s.tts_engine, ""], ["第 " + s.round + " 轮", ""]);
+  if (s.mic) badges.push(["🎤 " + s.mic, ""]);
+  const comp = s.compression || {};
+  if (comp.compressing) badges.push(["压缩上下文中…", "busy"]);
+  else if (comp.summary) badges.push(["已压缩 " + comp.cursor + " 条", ""]);
+  $("#badges").replaceChildren(...badges.map(([text, kind]) => el("span", "badge " + kind, text)));
+
+  renderMcpStatus(s.mcp || []);
+  renderSkills(s.skills || [], s.skills_dir);
+
+  const banner = $("#banner");
+  if (s.error) {
+    banner.hidden = false;
+    banner.className = "banner err";
+    banner.textContent = s.error;
+  } else if (s.session_closed) {
+    banner.hidden = false;
+    banner.className = "banner warn";
+    banner.textContent = "会话已结束（说了再见或空闲超时），点「重新开始」接着聊。";
+  } else {
+    banner.hidden = true;
+  }
+}
+
+function formatUsage(u) {  // assistant 消息上的 token 用量：↑prompt(缓存命中) ↓completion · 首包耗时
+  const prompt = u.prompt_tokens || 0;
+  const details = u.prompt_tokens_details || {};
+  const cached = details.cached_tokens || u.prompt_cache_hit_tokens || 0;
+  const hit = prompt && cached ? "（缓存 " + Math.round(cached / prompt * 100) + "%）" : "";
+  const ttft = u.first_chunk_latency_ms ? " · 首包 " + u.first_chunk_latency_ms + "ms" : "";
+  return "↑" + prompt + hit + " ↓" + (u.completion_tokens || 0) + ttft;
+}
+
+const VOICE_ICONS = '<svg class="play" viewBox="0 0 10 10"><path d="M2 1l7 4-7 4z"/></svg>'
+  + '<svg class="pause" viewBox="0 0 10 10"><path d="M2 1h2.4v8H2zM5.6 1H8v8H5.6z"/></svg>';
+const voiceDurations = new Map();  // audio_url -> 秒；messages 一变整个列表会重绘，时长记着就不用再拉一次元数据
+let playingVoice = null;           // 同时只放一条
+
+function formatSeconds(sec) {
+  return (sec < 10 ? sec.toFixed(1) : Math.round(sec)) + "s";
+}
+
+function renderVoice(url) {
+  const chip = el("span", "voice");
+  chip.title = "播放这句话的录音";
+  chip.innerHTML = VOICE_ICONS;
+  const label = el("span", null, voiceDurations.has(url) ? formatSeconds(voiceDurations.get(url)) : "…");
+  chip.append(label);
+
+  const audio = new Audio();
+  audio.preload = voiceDurations.has(url) ? "none" : "metadata";
+  // ASR 给的是它自己那台机器的绝对地址（默认 127.0.0.1:8086），只取路径走本页的 /audio 代理
+  audio.src = new URL(url, location.href).pathname;
+  audio.addEventListener("loadedmetadata", () => {
+    voiceDurations.set(url, audio.duration);
+    label.textContent = formatSeconds(audio.duration);
+  });
+  audio.addEventListener("timeupdate", () => {
+    if (audio.duration) chip.style.setProperty("--p", (audio.currentTime / audio.duration * 100) + "%");
+  });
+  audio.addEventListener("play", () => {
+    if (playingVoice && playingVoice !== audio) playingVoice.pause();
+    playingVoice = audio;
+    chip.classList.add("playing");
+  });
+  const reset = () => { chip.classList.remove("playing"); chip.style.setProperty("--p", "0%"); };
+  audio.addEventListener("pause", reset);
+  audio.addEventListener("ended", reset);
+  audio.addEventListener("error", () => { chip.classList.add("err"); label.textContent = "录音不可用"; });
+  chip.addEventListener("click", () => {
+    if (chip.classList.contains("err")) return;
+    if (audio.paused) audio.play(); else audio.pause();
+  });
+  return chip;
+}
+
+function renderMessage(m) {
+  const wrap = el("div", "msg " + m.role);
+  const head = el("div", "head");
+  head.append(el("span", "role", ROLE_LABEL[m.role] || m.role));
+
+  let body = m.content == null ? "" : String(m.content);
+  let meta = (m.time || "").slice(11, 19);  // 每条 message 都带 time（ISO），取 HH:MM:SS
+  let instructions = "";  // 工具调用后 SDK 自动补的一轮：text 为空、只带 response_instructions
+  if (m.role === "user") {
+    try {  // user content 是 JSON：{text, time, username, round, response_instructions}
+      const payload = JSON.parse(body);
+      if (payload && typeof payload === "object" && "text" in payload) {
+        body = payload.text || "";
+        instructions = payload.response_instructions || "";
+        meta = [payload.round ? "第 " + payload.round + " 轮" : "", meta || (payload.time || "").slice(11, 19)]
+          .filter(Boolean).join(" · ");
+      }
+    } catch (e) { /* 宿主直接塞的文本不是 JSON，原样显示 */ }
+  }
+  if (m.role === "tool") meta = [meta, m.name || "", m.elapsed_time || ""].filter(Boolean).join(" · ");
+  if (m.usage) meta = [meta, formatUsage(m.usage)].filter(Boolean).join(" · ");
+  if (meta) head.append(el("span", "meta", meta));
+  wrap.append(head);
+
+  if (m.reasoning_content) {  // 开思考时模型的推理过程（reasoning_content），不进 TTS，折叠显示
+    const think = el("details", "thinking");
+    think.append(el("summary", null, "💭 思考（" + m.reasoning_content.length + " 字）"));
+    think.append(el("pre", null, m.reasoning_content));
+    wrap.append(think);
+  }
+  if (m.role === "system") {
+    const details = el("details");
+    details.open = systemOpen;
+    details.append(el("summary", null, "系统提示词（" + body.length + " 字）"));
+    details.append(el("pre", null, body));
+    details.addEventListener("toggle", () => { systemOpen = details.open; });
+    wrap.append(details);
+  } else if (m.role === "tool" && body) {  // 工具返回的内容通常很长，默认折叠
+    const details = el("details");
+    details.append(el("summary", null, "🔧 结果（" + body.length + " 字）"));
+    details.append(el("pre", null, body));
+    wrap.append(details);
+  } else if (body) {
+    const bodyEl = el("div", "body", body);
+    if (m.audio_url) bodyEl.prepend(renderVoice(m.audio_url));  // ASR 识别这句话时的用户录音
+    wrap.append(bodyEl);
+  }
+  if (instructions) wrap.append(el("div", "instructions", "📋 回复要求：" + instructions));
+
+  for (const call of m.tool_calls || []) {
+    const fn = call.function || {};
+    wrap.append(el("div", "toolcall", "🔧 " + (fn.name || "") + "(" + (fn.arguments || "") + ")"));
+  }
+  return wrap;
+}
+
+function renderCompressDivider(comp) {
+  const wrap = el("div", "compress-divider");
+  const details = el("details");
+  details.open = compressOpen;
+  details.append(el("summary", null,
+    "📦 以上 " + comp.cursor + " 条已压缩为摘要（" + comp.summary.length + " 字），发给模型时以摘要替代原文"));
+  details.append(el("pre", null, comp.summary));
+  details.addEventListener("toggle", () => { compressOpen = details.open; });
+  wrap.append(details);
+  return wrap;
+}
+
+function renderMessages(msgs, comp) {
+  const sig = JSON.stringify(msgs) + "|" + JSON.stringify(comp || null);
+  if (sig === lastSig) return;
+  lastSig = sig;
+
+  const box = $("#messages");
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  const nodes = msgs.map(renderMessage);
+  // 压缩生效后：被摘要覆盖的消息压暗，压缩边界插分隔线（cursor 是去掉 system 后的 history 下标）
+  if (comp && comp.summary && comp.cursor > 0) {
+    const head = msgs.length && msgs[0].role === "system" ? 1 : 0;
+    const end = Math.min(head + comp.cursor, nodes.length);
+    for (let i = head; i < end; i++) nodes[i].classList.add("compressed");
+    nodes.splice(end, 0, renderCompressDivider(comp));
+  }
+  if (msgs.length) box.replaceChildren(...nodes);
+  else box.replaceChildren(el("div", "empty", "还没有消息"));
+  $("#msg-count").textContent = msgs.length + " 条";
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
+async function poll() {
+  if (busy) return;  // 重启时服务端在忙，别堆请求
+  try {
+    const data = await (await fetch("/api/state")).json();
+    renderStatus(data.status);
+    renderMessages(data.messages, data.status.compression);
+  } catch (e) { /* 进程没了，下次再试 */ }
+}
+
+for (const head of document.querySelectorAll(".group-head")) {
+  head.addEventListener("click", (event) => {
+    if (event.target.closest("button")) return;  // 标题栏上的「+ 添加」「JSON 模式」不该顺手折叠分区
+    const group = head.parentElement;
+    group.classList.toggle("open");
+    // 分区收着的时候 .mcp-target 量不到高度，展开分区后给已展开的行补算一次
+    if (group.classList.contains("open")) {
+      for (const row of group.querySelectorAll(".mcp-row.open")) setMcpRowOpen(row, true);
+    }
+  });
+}
+
+$("#skill-search").addEventListener("input", filterSkills);
+
+$("#mcp-add").addEventListener("click", () => {
+  addMcpRow("", {}, true).querySelector(".mcp-name").focus();
+  updateMcpCount();
+});
+
+$("#mcp-mode").addEventListener("click", () => {
+  if (jsonMode) {
+    let parsed;
+    try {
+      parsed = JSON.parse($("#mcp-json").value.trim() || "{}");
+    } catch (e) {
+      setNote("JSON 有语法错误，改好再切回来：" + e.message, false);
+      return;
+    }
+    renderMcpRows(parsed.mcpServers ? parsed : { mcpServers: parsed });
+  } else {
+    $("#mcp-json").value = JSON.stringify(collectMcp(), null, 2);
+  }
+  jsonMode = !jsonMode;
+  $("#mcp-json").hidden = !jsonMode;
+  $("#mcp-list").hidden = jsonMode;
+  $("#mcp-add").hidden = jsonMode;
+  $("#mcp-mode").textContent = jsonMode ? "行模式" : "JSON 模式";
+});
+
+async function sendText() {
+  const box = $("#send-text");
+  const text = box.value.trim();
+  if (!text || sending) return;
+  sending = true;
+  $("#send").disabled = true;
+  $("#send-note").textContent = "";
+  try {
+    const res = await fetch("/api/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      box.value = "";
+      poll();  // 别等下一次轮询，发完立刻能在消息里看到自己这句
+    } else {
+      $("#send-note").textContent = data.error || "发送失败";
+      $("#send-note").className = "err";
+    }
+  } catch (e) {
+    $("#send-note").textContent = String(e);
+    $("#send-note").className = "err";
+  } finally {
+    sending = false;
+    $("#send").disabled = false;
+    box.focus();
+  }
+}
+
+$("#send").addEventListener("click", sendText);
+$("#send-text").addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {  // 中文输入法选词的回车不算发送
+    event.preventDefault();
+    sendText();
+  }
+});
+
+$("#save").addEventListener("click", () => post("/api/config", formValues(), "已保存，ChatBot 已按新配置重启"));
+$("#restart").addEventListener("click", () => post("/api/restart", {}, "已重新开始"));
+
+fetch("/api/config").then((r) => r.json()).then(fillForm);
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>
