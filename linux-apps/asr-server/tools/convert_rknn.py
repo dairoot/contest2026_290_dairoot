@@ -1,8 +1,10 @@
 """把 tools/export_onnx.py 产出的定长 ONNX 转成 RK3576 的 .rknn。
 
-只能在 x86_64 Linux 上跑（rknn-toolkit2 没有 macOS / aarch64 的包）：
+只能在 Linux 上跑，rknn-toolkit2 没有 macOS 的包。**两个模型都在 Ubuntu x86_64 上
+转**（ASR 要 8 GB 以上内存，板子会被 OOM killer 杀掉）；声纹只要 2 GB，也可以直接在
+板子上原地转（aarch64 同样有包），详见 README「在哪台机器上转」。
 
-    pip install rknn-toolkit2
+    pip install rknn-toolkit2==2.3.2
     python tools/convert_rknn.py --model-dir rknn_models
 
 默认走 fp16（do_quantization=False），不需要校准集，精度基本无损；RK3576 的 NPU
@@ -14,8 +16,6 @@
 
     cat /proc/rknpu/version 2>/dev/null || cat /sys/kernel/debug/rknpu/version
     strings /usr/lib/librknnrt.so | grep -i "librknnrt version"
-
-本脚本未经实机验证——手上没有 x86 转换机，也没有板子。
 """
 
 import argparse

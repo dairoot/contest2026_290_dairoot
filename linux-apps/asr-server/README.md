@@ -161,7 +161,16 @@ sudo cp /usr/lib/librknnrt.so /usr/lib/librknnrt.so.bak && sudo cp librknnrt.so 
 定死；而 modelscope 上的 `iic/SenseVoiceSmall-onnx` 是 int8 量化版，rknn-toolkit2
 不接受量化模型。所以链路是 **PyTorch → 定长 fp32 ONNX → RKNN fp16**。
 
-#### 机器要求
+#### 在哪台机器上转：Ubuntu，不是 Mac
+
+**ASR 和声纹两个模型都在 Ubuntu x86_64 上转**（手上这台是 `ssh ubt`，19 GB 内存），
+转完把 `.rknn` scp 回板子。
+
+| 机器 | 能不能转 |
+| --- | --- |
+| **Ubuntu x86_64** | ✅ 两个都能转，**默认走这条路** |
+| macOS（开发机） | ❌ `rknn-toolkit2` 只有 Linux 的 PyPI 包（x86_64 / aarch64），装不上 |
+| RK3576 板子 | ⚠️ 只够转声纹（已实测，见下），ASR 会被 OOM killer 杀掉 |
 
 | 步骤 | 要求 |
 | --- | --- |
@@ -169,8 +178,19 @@ sudo cp /usr/lib/librknnrt.so /usr/lib/librknnrt.so.bak && sudo cp librknnrt.so 
 | 转换 RKNN | **Linux**（x86_64 或 aarch64 都有 PyPI 包），声纹要 2 GB 内存、ASR 要 **8 GB 以上** |
 | 磁盘 | 中间产物 937 MB + 214 MB，成品 473 MB + 174 MB，留 3 GB |
 
-板子本身（3.8 GB 内存）**只够转声纹，转 ASR 会被 OOM killer 杀掉**（fp32 权重压缩
-比很差，加 zram 也救不回来），得找台内存大的 Linux 机器转完再把 `.rknn` 拷回来。
+板子（3.8 GB 内存）转 ASR 必被 OOM killer 端掉——fp32 权重压缩比很差，加 zram 也救
+不回来。**声纹倒是能在板子上原地转完**，省掉一次 174 MB 的拷贝，2026-08-31 实测：
+导出 ONNX 3 分钟、转换 2 分钟，产物与 CPU 的 embedding 余弦 0.99869，NPU 784 ms /
+CPU 5277 ms。命令就是下面第 1、2 步加 `--skip-asr`，在板子的仓库目录里跑：
+
+```bash
+SPEAKER_BACKEND=modelscope uv run --with onnx --with onnxscript \
+    python tools/export_onnx.py --out-dir rknn_models --skip-asr
+~/rknn-venv/bin/python tools/convert_rknn.py --model-dir rknn_models
+```
+
+导出那步必须带 `SPEAKER_BACKEND=modelscope`，否则 `import speaker` 会去加载还不存在
+的 `.rknn`（板子上 `.env` 默认是 `rknn`）。
 
 #### 第 1 步：导出定长 fp32 ONNX
 
@@ -186,13 +206,25 @@ uv run --with onnx --with onnxscript python tools/export_onnx.py --out-dir rknn_
 换窗口大小重导时加 `--asr-dynamic-onnx ~/.cache/modelscope/models/iic--SenseVoiceSmall/snapshots/master/model.onnx`
 可以跳过 PyTorch 那步（省 3 GB 峰值内存和几分钟）。
 
-#### 第 2 步：转成 RKNN
+#### 第 2 步：转成 RKNN（在 Ubuntu 上）
+
+转换环境要和板子上 `librknnrt.so` 的版本对齐（当前两边都是 **2.3.2**）：
 
 ```bash
 python3 -m venv ~/rknn-venv
 ~/rknn-venv/bin/pip install "torch==2.4.0" --index-url https://download.pytorch.org/whl/cpu
 ~/rknn-venv/bin/pip install rknn-toolkit2==2.3.2 "setuptools<81" "onnx==1.16.1"
 ~/rknn-venv/bin/python tools/convert_rknn.py --model-dir rknn_models
+```
+
+Ubuntu 装的是精简版 Python，没有 `python3-venv`，第一行会报 `ensurepip is not
+available`。不想 `sudo apt install python3.10-venv` 的话，用 uv 建同样的 venv
+（后面几行照旧）：
+
+```bash
+uv venv ~/rknn-venv --python 3.10
+uv pip install --python ~/rknn-venv/bin/python "torch==2.4.0" --index-url https://download.pytorch.org/whl/cpu
+uv pip install --python ~/rknn-venv/bin/python rknn-toolkit2==2.3.2 "setuptools<81" "onnx==1.16.1"
 ```
 
 三个版本钉死都是必须的，少一个就跑不通（都是实际踩过的）：
