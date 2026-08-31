@@ -1,0 +1,12 @@
+[Unit]
+Description=POST /api/restart on openvela wake-word detections
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -u /home/kickpi/wake_watch.py --exec "curl -s -m 3 -X POST -w \"restart POST -> %%{http_code}\\n\" http://127.0.0.1:8080/api/restart"
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
