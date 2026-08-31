@@ -4,7 +4,10 @@ After=multi-user.target sound.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 -u /home/kickpi/wake_watch.py --exec "aplay -D plughw:rockchipes8388,0 /home/kickpi/ding.wav"
+# ding goes through the desktop user's PulseAudio so it mixes with whatever
+# else is playing; a raw plughw open fails with EBUSY whenever PA holds the
+# card (e.g. the aichat app's TTS).
+ExecStart=/usr/bin/python3 -u /home/kickpi/wake_watch.py --exec "runuser -u kickpi -- env XDG_RUNTIME_DIR=/run/user/1000 paplay --volume=43690 /home/kickpi/ding.wav"
 Restart=on-failure
 RestartSec=5
 
