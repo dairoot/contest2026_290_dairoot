@@ -3,3 +3,10 @@ __pycache__/
 # RKNN 模型产物，不进版本库（见 README 的生成步骤）
 *.rknn
 *.onnx
+
+# 小米账号登录态，含凭据
+data/
+
+# 本机 uv 解析结果和 YOLO 权重（5.4M），都不入库
+uv.lock
+yolo11n.pt
