@@ -11,7 +11,11 @@ import datetime
 import json
 import logging
 import os
+import shlex
+import shutil
 import sys
+import urllib.request
+import zoneinfo
 
 import numpy as np
 import sounddevice as sd
@@ -32,6 +36,7 @@ from server import serve
 
 from aichat_sdk import ChatBot
 from aichat_sdk.config import DEFAULT_AGENT_SOUL
+from aichat_sdk.llm import mcp as sdk_mcp
 from aichat_sdk.llm.mcp import (
     DEFAULT_TOOLS_SERVER,
     get_mcp_server_status,
@@ -42,6 +47,10 @@ from aichat_sdk.llm.system_prompt import SKILLS_DIR, load_skills
 from aichat_sdk.llm.type_enum import AgentInfo, DeviceInfo
 from aichat_sdk.mcp_tool import mcp as tools_mcp
 
+# SDK 默认 10 秒，板上不够用：aichat-tools 子进程光 import aichat_sdk 就要 9.9 秒
+# （aarch64，Mac 上 0.8 秒），连上稳定要 10.3 秒，每次都差一点点超时被跳过。
+sdk_mcp.MCP_TOOL_TIMEOUT_SECONDS = 20
+
 logger = logging.getLogger("web_console")
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -50,6 +59,7 @@ WEB_HOST = "0.0.0.0"  # 注意：页面能改外部 MCP server 的启动命令�
 WEB_PORT = 8080
 OUTPUT_SAMPLE_RATE = 24000  # 采样率不放到页面上配，扬声器流建一次就一直用
 TTS_ENGINES = ["bytedance", "v3", "edge"]
+PIP_INSTALL_TIMEOUT = 300  # 秒；pip 卡在网络上别让「安装中」永远转下去
 
 DEFAULT_CONFIG = {
     "tts_engine": "bytedance",
@@ -63,8 +73,9 @@ DEFAULT_CONFIG = {
     "aichat_tools": {},
     # 技能的开关，{技能名: 是否启用}，缺省启用；停用的不烘进系统提示词
     "skills": {},
-    # 外部 MCP server，格式同 AgentInfo.mcp；fetch 需要 pip install mcp-server-fetch
-    "mcp": {"mcpServers": {"fetch": {"command": sys.executable, "args": ["-m", "mcp_server_fetch"]}}},
+    # 外部 MCP server，格式同 AgentInfo.mcp；fetch 用 uvx 起在它自己的环境里——mcp-server-fetch 钉
+    # mcp<2，装进本 venv 会跟 SDK 依赖的 fastmcp 要的 mcp>=2 打架（表现为 server 起不来报 ImportError）
+    "mcp": {"mcpServers": {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}}},
 }
 
 
@@ -82,11 +93,29 @@ def resolve_mic(name: str) -> int | None:
     return None
 
 
+def detect_location() -> dict:
+    """按出口 IP 定位时区和城市（https://ipinfo.io/json），config.json 不存在时用；失败返回空 dict 走默认值。"""
+    try:
+        with urllib.request.urlopen("https://ipinfo.io/json", timeout=5) as resp:
+            info = json.load(resp)
+        offset = datetime.datetime.now(zoneinfo.ZoneInfo(info["timezone"])).utcoffset().total_seconds() / 3600
+    except Exception as exc:
+        logger.warning("IP 定位失败（%s），时区/城市用默认值", exc)
+        return {}
+    detected = {"timezone": int(offset) if offset.is_integer() else offset}
+    if str(info.get("city", "")).strip():
+        detected["city"] = str(info["city"]).strip()
+    logger.info("IP 定位：%s（UTC%+g）", detected.get("city", "未知城市"), offset)
+    return detected
+
+
 def load_config() -> dict:
     config = dict(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding="utf-8") as f:
             config.update(json.load(f))
+    else:
+        config.update(detect_location())
     for key in ("aichat_tools", "skills"):  # 兼容手改坏的配置
         if not isinstance(config.get(key), dict):
             config[key] = {}
@@ -150,6 +179,45 @@ def effective_mcp(mcp: dict) -> dict:
     return {"mcpServers": servers}
 
 
+def missing_python_module(spec, error: str) -> tuple[str, str] | None:
+    """server 连不上的原因是「python -m 的模块没装」时，返回 (解释器, 模块名)，页面据此给一键安装按钮。
+
+    `python -m 没装的模块` 会往 stderr 打一行「No module named xxx」然后退出，
+    _connect_external 把它带进了 error；模块装上了但缺依赖也是这句（引号包着依赖名），
+    重装模块本身的包会顺带补齐依赖，一样能治。
+    """
+    if "No module named" not in error:
+        return None
+    if isinstance(spec, str):
+        parts = shlex.split(spec)
+        command, args = (parts[0] if parts else ""), parts[1:]
+    elif isinstance(spec, dict):
+        command, args = spec.get("command") or "", list(spec.get("args") or [])
+    else:
+        return None
+    if not os.path.basename(command).lower().startswith("python"):
+        return None  # uvx / npx 这些自带安装逻辑，装不动的原因五花八门，不掺和
+    if "-m" in args and args.index("-m") + 1 < len(args):
+        module = args[args.index("-m") + 1]
+        if module and not module.startswith("-"):
+            return command, module
+    return None
+
+
+async def run_install_command(args: list[str]) -> tuple[int, str]:
+    """跑一条安装命令，返回 (退出码, stdout+stderr)；超时杀掉进程并抛 ValueError。"""
+    proc = await asyncio.create_subprocess_exec(
+        *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT
+    )
+    try:
+        output, _ = await asyncio.wait_for(proc.communicate(), timeout=PIP_INSTALL_TIMEOUT)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise ValueError(f"「{' '.join(args)}」超过 {PIP_INSTALL_TIMEOUT} 秒没跑完，已放弃")
+    return proc.returncode, output.decode(errors="replace")
+
+
 def validate_config(raw: dict) -> dict:
     """校验页面提交的配置，返回干净的一份；不合法就抛 ValueError，消息直接显示给页面。"""
     if not isinstance(raw, dict):
@@ -209,6 +277,7 @@ class AIClient:
         self.is_playing = False
         self.is_session_closed = False
         self.is_restarting = False
+        self.installing = ""  # 正在 pip install 依赖的 server 名，页面按钮显示「安装中」并防连点
         self.mic_device = ""  # 实际拾音的输入设备名（配的设备没了就是回退到的那个），页面挂个 badge 显示
         self._session_started_at: datetime.datetime | None = None
         self._messages_saved = False
@@ -253,6 +322,7 @@ class AIClient:
         rows = []
         for name, spec in self.config["mcp"].get("mcpServers", {}).items():
             state = states.pop(name, {})
+            missing = missing_python_module(spec, state.get("error", ""))
             rows.append(
                 {
                     "name": name,
@@ -260,6 +330,9 @@ class AIClient:
                     "connected": bool(state.get("connected")),
                     "error": state.get("error", ""),
                     "tools": state.get("tools", []),
+                    # 缺 pip 包连不上的，给页面报可安装的包名（PyPI 上 _ 和 - 等价，展示用 - 的写法）
+                    "install": missing[1].replace("_", "-") if missing else "",
+                    "installing": name == self.installing,
                 }
             )
         # SDK 自带工具的 server 不走 mcpServers 配置，每个工具由 aichat_tools 开关控制；
@@ -328,6 +401,45 @@ class AIClient:
         config = validate_config(raw)
         save_config(config)
         await self.restart(config)
+
+    async def install_mcp_package(self, name: str) -> str:
+        """给缺 Python 包连不上的 MCP server 装包，装完重启 ChatBot 重连，返回装的包名。
+
+        用 server 配置里的那个解释器跑 pip，包才装进它启动时用的环境；解释器没带 pip
+        （uv 建的 venv 默认就没有）就退回 `uv pip install --python 该解释器` 装进同一环境。
+        不合法/装失败抛 ValueError 给页面。
+        """
+        if self.installing:
+            raise ValueError(f"正在给「{self.installing}」装依赖，等它装完")
+        spec = self.config["mcp"].get("mcpServers", {}).get(name)
+        if spec is None:
+            raise ValueError(f"配置里没有叫「{name}」的 MCP server")
+        state = next((row for row in get_mcp_server_status() if row["name"] == name), {})
+        missing = missing_python_module(spec, state.get("error", ""))
+        if missing is None:
+            raise ValueError(f"「{name}」连不上不是因为缺 Python 包，没法一键安装")
+        interpreter, module = missing
+        package = module.replace("_", "-")
+
+        self.installing = name
+        try:
+            logger.info("pip install %s（%s）", package, interpreter)
+            code, output = await run_install_command([interpreter, "-m", "pip", "install", package])
+            if code != 0 and "No module named pip" in output:
+                uv = shutil.which("uv")
+                if uv is None:
+                    raise ValueError(f"{interpreter} 没带 pip，也找不到 uv；手动装：uv pip install {package}")
+                logger.info("解释器没带 pip，改用 uv 装 %s", package)
+                code, output = await run_install_command([uv, "pip", "install", "--python", interpreter, package])
+            if code != 0:
+                tail = "\n".join(output.strip().splitlines()[-3:])
+                raise ValueError(f"安装 {package} 失败：{tail}")
+        finally:
+            self.installing = ""
+
+        logger.info("已安装 %s，重启 ChatBot 重连「%s」", package, name)
+        await self.restart()  # _start_bot 会让工具列表重建，连不上的 server 这次会重试
+        return package
 
     async def restart(self, config: dict | None = None) -> None:
         async with self._lock:
@@ -518,10 +630,7 @@ class AIClient:
     # ---------------- 入口 ----------------
 
     async def run(self):
-        # latency 不显式给的话，portaudio 经 ALSA→pulse 插件会协商出一个极浅的缓冲
-        # （板上实测 <1ms），TTS 句首供数稍慢就连环 underrun（前几个字破音）；给 250ms。
-        self._output_stream = sd.OutputStream(
-            samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype=np.int16, latency=0.25)
+        self._output_stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype=np.int16)
         self._output_stream.start()
         try:
             await self.restart()  # 拾音流在里面按配置开，换设备保存后一起重开

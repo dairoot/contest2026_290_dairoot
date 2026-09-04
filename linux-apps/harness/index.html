@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ChatBot 配置台</title>
+<title>harness 终端</title>
 <style>
 :root {
   --bg:#f4f6f8; --card:#fff; --fg:#1b1e23; --muted:#6b7280; --line:#e2e6ea;
@@ -38,6 +38,8 @@ main { display:grid; grid-template-columns:400px minmax(0,1fr); gap:16px; paddin
   .actions { position:sticky; bottom:0; }
 }
 .badge { font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
+#camera { margin-left:auto; font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--muted); text-decoration:none; }
+#camera:hover { color:var(--accent); border-color:var(--accent); }
 .badge.ok { color:var(--ok); border-color:var(--ok); }
 .badge.busy { color:var(--accent); border-color:var(--accent); }
 .badge.warn { color:var(--warn); border-color:var(--warn); }
@@ -121,18 +123,26 @@ input.mcp-name:focus { background:var(--bg); border-color:var(--line); }
 }
 .mcp-del { display:block; margin:8px 0 0 auto; border:0; background:none; color:var(--muted); font-size:12px; cursor:pointer; }
 .mcp-del:hover { color:var(--err); }
+.mcp-install {  /* 缺 pip 包连不上时的一键安装，跟在报错下面 */
+  display:block; margin-top:6px; font-size:12px; padding:3px 9px; border-radius:6px;
+  border:1px solid var(--line); background:var(--bg); color:var(--fg); cursor:pointer;
+}
+.mcp-install[hidden] { display:none; }  /* display:block 会压过 hidden 属性自带的 display:none，得补回来 */
+.mcp-install:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+.mcp-install:disabled { opacity:.6; cursor:default; }
 .actions {  /* 配置区自己滚动，操作条常驻卡片底边 */
   display:flex; align-items:center; gap:10px; flex:none;
   padding:12px 16px; background:var(--card);
   border-top:1px solid var(--line); border-radius:0 0 10px 10px;
 }
+.actions button { flex:none; }  /* 提示文案长时只挤文案自己，按钮不许被压到换行 */
 button {
   font:inherit; padding:7px 14px; border-radius:8px; cursor:pointer;
   border:1px solid var(--line); background:var(--card); color:var(--fg);
 }
 button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
 button:disabled { opacity:.5; cursor:default; }
-.note { font-size:12px; }
+.note { font-size:12px; flex:1; min-width:0; line-height:1.5; }  /* 占满剩余宽度，长文案自己换行 */
 .note.ok { color:var(--ok); }
 .note.err { color:var(--err); }
 .banner { font-size:12.5px; padding:8px 10px; border-radius:8px; margin-bottom:12px; border:1px solid; }
@@ -193,8 +203,9 @@ details.thinking pre { color:var(--muted); }
 <body>
 
 <header>
-  <h1>ChatBot 配置台</h1>
+  <h1>harness 终端</h1>
   <div id="badges" style="display:flex; gap:6px;"></div>
+  <a id="camera" target="_blank" rel="noopener">📷 摄像头</a>
 </header>
 
 <main>
@@ -367,8 +378,12 @@ function addMcpRow(name, spec, open) {
   target.placeholder = "python -m mcp_server_fetch 或 http://127.0.0.1:8000/mcp";
   const del = el("button", "mcp-del", "✕ 删除");
   del.type = "button";
+  const install = el("button", "mcp-install");  // 缺 pip 包连不上时才显示，renderMcpStatus 管
+  install.type = "button";
+  install.hidden = true;
+  install.addEventListener("click", () => installMcp(row, install));
   const body = el("div", "mcp-body");
-  body.append(target, el("div", "mcp-tools"), el("div", "mcp-error"), del);
+  body.append(target, el("div", "mcp-tools"), el("div", "mcp-error"), install, del);
 
   const syncType = () => (type.textContent = /^https?:\/\//i.test(target.value.trim()) ? "http" : "stdio");
   const syncOff = () => row.classList.toggle("off", !enabled.checked);
@@ -454,12 +469,44 @@ function renderMcpStatus(list) {
     } else {
       badge.textContent = "未连接";
     }
+    // 缺 pip 包连不上的给一键安装按钮；点击后到装完的过程中不碰它（dataset.busy），别把「安装中…」刷掉
+    const install = row.querySelector(".mcp-install");
+    const installable = state && state.install && row.querySelector(".mcp-enabled").checked;
+    if (!install.dataset.busy) {
+      install.hidden = !installable;
+      if (installable) {
+        install.disabled = !!state.installing;
+        install.textContent = state.installing ? "安装中…" : "⬇ pip install " + state.install;
+      }
+    }
     renderToolList(row, (state && state.tools) || []);
     if (state && state.error && row.dataset.errorSeen !== state.error) {
       row.dataset.errorSeen = state.error;  // 同一个错误只自动展开一次，收起来了就别再弹开
       row.closest(".group").classList.add("open");  // 分区默认收着，得先弹开分区才量得到高度，也才看得见
       setMcpRowOpen(row, true);
     }
+  }
+}
+
+async function installMcp(row, btn) {
+  const name = row.querySelector(".mcp-name").value.trim();
+  btn.dataset.busy = "1";
+  btn.disabled = true;
+  btn.textContent = "安装中…（装完会自动重启重连）";
+  try {
+    const res = await fetch("/api/mcp/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    setNote(data.ok ? "已安装 " + data.package + "，ChatBot 已重启重连" : (data.error || "安装失败"), data.ok);
+  } catch (e) {
+    setNote(String(e), false);
+  } finally {
+    delete btn.dataset.busy;
+    btn.disabled = false;
+    poll();  // 立刻按最新状态重画按钮和徽章，别等下一秒
   }
 }
 
@@ -694,8 +741,7 @@ function renderStatus(s) {
   else if (s.session_closed) badges.push(["会话已结束", "warn"]);
   else if (s.speaking) badges.push(["说话中", "busy"]);
   else badges.push(["聆听中", "ok"]);
-  badges.push([s.tts_engine, ""], ["第 " + s.round + " 轮", ""]);
-  if (s.mic) badges.push(["🎤 " + s.mic, ""]);
+  badges.push(["第 " + s.round + " 轮", ""]);
   const comp = s.compression || {};
   if (comp.compressing) badges.push(["压缩上下文中…", "busy"]);
   else if (comp.summary) badges.push(["已压缩 " + comp.cursor + " 条", ""]);
@@ -948,6 +994,8 @@ $("#send-text").addEventListener("keydown", (event) => {
 
 $("#save").addEventListener("click", () => post("/api/config", formValues(), "已保存，ChatBot 已按新配置重启"));
 $("#restart").addEventListener("click", () => post("/api/restart", {}, "已重新开始"));
+
+$("#camera").href = "http://" + location.hostname + ":8180";  // camera-server 和 harness 同机，只有端口不同
 
 fetch("/api/config").then((r) => r.json()).then(fillForm);
 poll();
