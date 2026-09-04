@@ -1,3 +1,5 @@
 .env
 sessions/
 __pycache__/
+config.json
+uv.lock

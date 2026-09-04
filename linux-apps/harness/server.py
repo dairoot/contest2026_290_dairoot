@@ -1,10 +1,11 @@
-"""web 配置台的 HTTP 层：一个页面 + 五个接口 + 一个录音代理，只跟 AIClient 打交道。
+"""web 配置台的 HTTP 层：一个页面 + 六个接口 + 一个录音代理，只跟 AIClient 打交道。
 
 - GET  /             页面
 - GET  /api/config   当前配置 + 可选的麦克风列表（页面加载时填表单，之后不再轮询，免得覆盖正在编辑的内容）
 - POST /api/config   保存配置并按新配置重建 ChatBot
 - POST /api/restart  用当前配置重开一轮会话
 - POST /api/send     发一句文本给 ChatBot（等同说话，照样会出声）
+- POST /api/mcp/install  给缺 Python 包连不上的 MCP server 装包，装完自动重启重连
 - GET  /api/state    状态 + llm.messages（页面每秒轮询）
 - GET  /audio/...    转发到 ASR 服务上的用户录音（见 get_audio）
 """
@@ -57,6 +58,13 @@ def create_app(client) -> Starlette:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         return JSONResponse({"ok": True})
 
+    async def post_mcp_install(request: Request):
+        try:
+            package = await client.install_mcp_package((await request.json()).get("name", ""))
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        return JSONResponse({"ok": True, "package": package})
+
     async def get_state(request: Request):
         return JSONResponse({"status": client.status(), "messages": client.messages()})
 
@@ -83,6 +91,7 @@ def create_app(client) -> Starlette:
             Route("/api/config", post_config, methods=["POST"]),
             Route("/api/restart", post_restart, methods=["POST"]),
             Route("/api/send", post_send, methods=["POST"]),
+            Route("/api/mcp/install", post_mcp_install, methods=["POST"]),
             Route("/api/state", get_state),
             Route("/audio/{path:path}", get_audio),
         ]
