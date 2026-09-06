@@ -2,7 +2,7 @@
 
 小米摄像头的 HEVC 码流拉下来，在 RK3576 的 VPU 上硬解、NPU 上跑 yolo11n 检测，
 以 MJPEG 推给浏览器；同一个服务另外开三个接口做米家设备的开关。板上的语音助手
-[`../harness/`](../harness/) 通过 `miloco_mcp.py` 调这些接口——「看一眼摄像头」和
+[`../harness/`](../harness/) 通过 `mcp/miloco_mcp.py` 调这些接口——「看一眼摄像头」和
 「把客厅的灯打开」两件事都落在这里。
 
 拉流和设备控制都走 [miloco-sdk](https://github.com/dairoot/miloco-sdk)，登录态缓存在

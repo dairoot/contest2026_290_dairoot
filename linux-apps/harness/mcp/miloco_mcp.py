@@ -1,7 +1,7 @@
 """miloco 的 stdio MCP server：看摄像头画面 + 开关米家设备，两件事都走 miloco-server 的 HTTP 接口。
 
 配到 mcpServers 里即可（cwd 和 PATH 跟着 harness 走）：
-    {"米家": {"command": "python", "args": ["miloco_mcp.py"]}}
+    {"米家": {"command": "python", "args": ["mcp/miloco_mcp.py"]}}
 """
 
 import base64
@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import time
+from pathlib import Path
 import urllib.error
 import urllib.request
 
@@ -19,8 +20,8 @@ from openai import OpenAI
 from pydantic import Field
 
 # stdio 子进程只继承 PATH/HOME 这几个白名单变量（mcp.client.stdio 的 DEFAULT_INHERITED_ENV_VARS），
-# harness 进程里的 OPENAI_* 传不过来，所以自己读同目录的 .env。
-load_dotenv()
+# harness 进程里的 OPENAI_* 传不过来，所以自己读 harness 根目录的 .env。
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 SERVER_URL = "http://localhost:8180"  # miloco-server，和 harness 同机
 VIDEO_FEED_URL = f"{SERVER_URL}/video_feed"

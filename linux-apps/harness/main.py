@@ -75,13 +75,13 @@ DEFAULT_CONFIG = {
     "skills": {},
     # 外部 MCP server，格式同 AgentInfo.mcp；fetch 用 uvx 起在它自己的环境里——mcp-server-fetch 钉
     # mcp<2，装进本 venv 会跟 SDK 依赖的 fastmcp 要的 mcp>=2 打架（表现为 server 起不来报 ImportError）。
-    # 米家就在本目录，依赖（fastmcp / openai）已经在 pyproject 里，直接用本 venv 的 python 起。
-    # command / args 都不写死路径：python 靠 PATH 找到本 venv，脚本靠 cwd 找到本目录——
-    # miloco_mcp.py 里的 load_dotenv() 本来就是按 cwd 找 .env，两者是同一个前提
+    # 本地 MCP 脚本统一放在 mcp/，依赖在 pyproject 里，直接用本 venv 的 python 起。
+    # python 靠 PATH 找到本 venv，脚本路径相对于 harness 工作目录。
     "mcp": {
         "mcpServers": {
             "fetch": {"command": "uvx", "args": ["mcp-server-fetch"]},
-            "米家": {"command": "python", "args": ["miloco_mcp.py"]},
+            "米家": {"command": "python", "args": ["mcp/miloco_mcp.py"]},
+            "音量": {"command": "python", "args": ["mcp/volume_mcp.py"]},
         }
     },
 }
@@ -127,6 +127,14 @@ def load_config() -> dict:
     for key in ("aichat_tools", "skills"):  # 兼容手改坏的配置
         if not isinstance(config.get(key), dict):
             config[key] = {}
+    # 音量工具默认提供，也补到旧配置里；显式 enabled=false 的设置保留。
+    servers = config.setdefault("mcp", {}).setdefault("mcpServers", {})
+    servers.setdefault("音量", {"command": "python", "args": ["mcp/volume_mcp.py"]})
+    # 兼容搬目录前保存的配置；自定义 cwd 的外部脚本不改。
+    for spec in servers.values():
+        if isinstance(spec, dict) and not spec.get("cwd"):
+            if spec.get("args") in (["miloco_mcp.py"], ["volume_mcp.py"]):
+                spec["args"] = [f"mcp/{spec['args'][0]}"]
     return config
 
 
