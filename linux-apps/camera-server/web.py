@@ -23,8 +23,9 @@ frame_queue = Queue(maxsize=2)
 frame_lock = Lock()
 latest_frame = None
 
-# Rockchip VPU 硬解输出尺寸（VPU 内部用 RGA 缩放），设成 0 表示保持摄像头原始分辨率
-HW_WIDTH, HW_HEIGHT = 1920, 1080
+# Rockchip VPU 硬解输出尺寸（VPU 内部用 RGA 缩放），设成 0 表示保持摄像头原始分辨率。
+# 拉的是 LOW 档码流，放大到 1080p 只是让后面的 cvtColor/imencode 为插值出来的像素买单
+HW_WIDTH, HW_HEIGHT = 0, 0
 Gst = None
 gst_pipeline = None
 gst_appsrc = None  # 为 None 时表示没有硬解，回退到 PyAV 软解
@@ -168,7 +169,8 @@ def init_hw_decoder():
     sink.set_property("emit-signals", True)
     sink.connect("new-sample", on_hw_sample)
     gst_pipeline.set_state(Gst.State.PLAYING)
-    print(f"已启用 Rockchip VPU 硬解，输出 {HW_WIDTH}x{HW_HEIGHT}")
+    size = f"{HW_WIDTH}x{HW_HEIGHT}" if HW_WIDTH and HW_HEIGHT else "原始分辨率"
+    print(f"已启用 Rockchip VPU 硬解，输出 {size}")
     return gst_pipeline.get_by_name("src")
 
 
