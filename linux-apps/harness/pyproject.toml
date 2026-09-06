@@ -11,7 +11,7 @@ dependencies = [
     "uvicorn>=0.29",
     # 代理 asr-server 的录音文件下载（同源 /audio 路由）。
     "httpx>=0.27",
-    # camera_mcp.py：把摄像头画面交给视觉模型描述的 stdio MCP server。两个包 aichat-sdk 也依赖，
+    # miloco_mcp.py：看摄像头画面 + 开关米家设备的 stdio MCP server。两个包 aichat-sdk 也依赖，
     # 这里因为直接 import 才显式写上。
     "fastmcp>=4",
     "openai>=1.40",

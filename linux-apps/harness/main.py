@@ -74,8 +74,16 @@ DEFAULT_CONFIG = {
     # 技能的开关，{技能名: 是否启用}，缺省启用；停用的不烘进系统提示词
     "skills": {},
     # 外部 MCP server，格式同 AgentInfo.mcp；fetch 用 uvx 起在它自己的环境里——mcp-server-fetch 钉
-    # mcp<2，装进本 venv 会跟 SDK 依赖的 fastmcp 要的 mcp>=2 打架（表现为 server 起不来报 ImportError）
-    "mcp": {"mcpServers": {"fetch": {"command": "uvx", "args": ["mcp-server-fetch"]}}},
+    # mcp<2，装进本 venv 会跟 SDK 依赖的 fastmcp 要的 mcp>=2 打架（表现为 server 起不来报 ImportError）。
+    # 米家就在本目录，依赖（fastmcp / openai）已经在 pyproject 里，直接用本 venv 的 python 起。
+    # command / args 都不写死路径：python 靠 PATH 找到本 venv，脚本靠 cwd 找到本目录——
+    # miloco_mcp.py 里的 load_dotenv() 本来就是按 cwd 找 .env，两者是同一个前提
+    "mcp": {
+        "mcpServers": {
+            "fetch": {"command": "uvx", "args": ["mcp-server-fetch"]},
+            "米家": {"command": "python", "args": ["miloco_mcp.py"]},
+        }
+    },
 }
 
 
