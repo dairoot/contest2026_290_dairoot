@@ -1,4 +1,4 @@
-"""web 配置台的 HTTP 层：一个页面 + 六个接口 + 一个录音代理，只跟 AIClient 打交道。
+"""web 配置台的 HTTP 层：一个页面 + 七个接口 + 一个录音代理，只跟 AIClient 打交道。
 
 - GET  /             页面
 - GET  /api/config   当前配置 + SDK 的 TTS 引擎目录 + 麦克风列表（页面加载时填表单，之后不再轮询，免得覆盖正在编辑的内容）
@@ -6,12 +6,14 @@
 - POST /api/restart  用当前配置重开一轮会话
 - POST /api/send     发一句文本给 ChatBot（等同说话，照样会出声）
 - POST /api/mcp/install  给缺 Python 包连不上的 MCP server 装包，装完自动重启重连
-- GET  /api/state    状态 + llm.messages（页面每秒轮询）
+- GET  /api/state    完整状态 + llm.messages（页面加载、保存配置、重启后各取一次）
+- GET  /api/events   SSE：把会变的那部分状态和 llm.messages 推给页面，代替轮询
 - GET  /audio/...    转发到 ASR 服务上的用户录音（见 get_audio）
 """
 
 import asyncio
 import contextlib
+import json
 import os
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -19,12 +21,13 @@ import httpx
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from aichat_sdk.config import ASR_SERVER_WS_URL
 
 INDEX_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+EVENT_INTERVAL = 0.5  # 秒；SSE 每隔这么久看一眼状态变没变
 
 # ASR 服务的 http 根，跟 AsrWebSocketClient 一样按 ws 地址推出来
 _ASR = urlsplit(ASR_SERVER_WS_URL)
@@ -68,6 +71,33 @@ def create_app(client) -> Starlette:
     async def get_state(request: Request):
         return JSONResponse({"status": client.status(), "messages": client.messages()})
 
+    async def get_events(request: Request):
+        """状态和新消息的 SSE 流：ChatBot 没有变更回调，服务端自己看着，变了才发一帧。
+
+        llm.messages 只追加、不改已有的（压缩只影响发给模型的那份，见 ContextCompressor.compact），
+        所以每帧只带 messages[start:]，start 是这条连接已经发出去的条数，页面照着往后拼。
+        重启会换一个新的 ChatBot，messages 也换成新 list，这时 start 归 0 整份重发。
+        """
+
+        async def stream():
+            last_status = None
+            last_messages = None
+            sent = 0
+            while True:
+                messages = client.messages()
+                if messages is not last_messages:  # 换了新会话（重启 / 还没起来），整份重来
+                    last_messages, sent = messages, 0
+                status = client.live_status()
+                if status != last_status or sent < len(messages):
+                    frame = json.dumps(
+                        {"status": status, "start": sent, "messages": messages[sent:]}, ensure_ascii=False
+                    )
+                    last_status, sent = status, len(messages)  # 发出去了才算已发
+                    yield f"data: {frame}\n\n"
+                await asyncio.sleep(EVENT_INTERVAL)
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
     async def get_audio(request: Request):
         """代理 ASR 服务上的用户录音。
 
@@ -93,6 +123,7 @@ def create_app(client) -> Starlette:
             Route("/api/send", post_send, methods=["POST"]),
             Route("/api/mcp/install", post_mcp_install, methods=["POST"]),
             Route("/api/state", get_state),
+            Route("/api/events", get_events),
             Route("/audio/{path:path}", get_audio),
         ]
     )
