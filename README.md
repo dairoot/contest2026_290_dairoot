@@ -50,7 +50,7 @@ contest2026_290_dairoot/
 │   └── linux-side/                 Linux 侧配套文件（DTS/its/分区/defconfig）
 ├── nuttx-side/                     ★ nuttx 公共仓侧的 RK3576 芯片层补丁（git am）
 ├── tools/kws/                      ★ 离线唤醒词：训练→导出→对拍→评测→烧写全管线
-├── linux-apps/                     ★ Linux 侧用户态服务（模型都跑 RK3576 NPU）
+├── linux-apps/                     ★ Linux 侧用户态服务（识别模型都跑 RK3576 NPU）
 │   ├── asr-server/                 语音识别 + 声纹（SenseVoice / ERes2NetV2）
 │   └── camera-server/              摄像头视频流 VPU 硬解 + yolo11n 检测
 └── logs/                           AI Coding 日志

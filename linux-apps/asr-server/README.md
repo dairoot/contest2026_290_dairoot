@@ -17,7 +17,7 @@ VAD、ASR 和说话人状态。**ASR 与声纹两个模型都跑在 RK3576 的 6
 asr_client.py         # AsrClient：音频分块、VAD 驱动、快/慢回复策略
 server.py             # WebSocket + HTTP 服务入口
 config.py             # 后端选择与模型路径（读 .env）
-vad.py                # FSMN VAD
+vad.py                # FSMN VAD（PyTorch，跑 CPU）
 speaker.py            # 说话人匹配（centroid）+ 后端分流
 speaker_rknn.py       # 声纹 NPU 后端
 event_emitter.py      # 极简异步事件总线
@@ -97,6 +97,12 @@ ASR 和声纹**默认都跑在 NPU 上**，板子实测（RK3576，8 核 CPU / 6
 NPU 是定长窗口，耗时与音频长短无关：5 秒窗口恒定约 390 ms，10 秒窗口恒定约
 655 ms。所以窗口不是越大越好——10 秒窗口下 3.7 秒的短句反而打不过 CPU。默认用
 5 秒，`ASR_RKNN_WINDOW_MS` 和导出时的 `--asr-seconds` 必须一致。
+
+**VAD 不上 NPU**：`vad.py` 用 funasr 直接加载 FSMN-VAD
+（`iic/speech_fsmn_vad_zh-cn-16k-common-pytorch`），PyTorch 推理、板上就是 CPU。
+它是流式的，逐 chunk 传 `vad_cache` 才能判断端点，而 RKNN 是定长窗口 + 无状态，
+正好卡在最不适配的地方；模型本身也小，留在 CPU 上不值得转。所以本服务只有 ASR 和
+声纹两个 `.rknn`，`tools/` 下的导出与转换脚本也只处理这两个。
 
 ### 怎么选后端
 
