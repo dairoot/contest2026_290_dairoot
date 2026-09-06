@@ -38,8 +38,8 @@ main { display:grid; grid-template-columns:400px minmax(0,1fr); gap:16px; paddin
   .actions { position:sticky; bottom:0; }
 }
 .badge { font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
-#camera { margin-left:auto; font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--muted); text-decoration:none; }
-#camera:hover { color:var(--accent); border-color:var(--accent); }
+#miloco { margin-left:auto; font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--muted); text-decoration:none; }
+#miloco:hover { color:var(--accent); border-color:var(--accent); }
 .badge.ok { color:var(--ok); border-color:var(--ok); }
 .badge.busy { color:var(--accent); border-color:var(--accent); }
 .badge.warn { color:var(--warn); border-color:var(--warn); }
@@ -205,7 +205,7 @@ details.thinking pre { color:var(--muted); }
 <header>
   <h1>harness 终端</h1>
   <div id="badges" style="display:flex; gap:6px;"></div>
-  <a id="camera" target="_blank" rel="noopener">📷 摄像头</a>
+  <a id="miloco" target="_blank" rel="noopener">🏠 米家设备</a>
 </header>
 
 <main>
@@ -995,7 +995,7 @@ $("#send-text").addEventListener("keydown", (event) => {
 $("#save").addEventListener("click", () => post("/api/config", formValues(), "已保存，ChatBot 已按新配置重启"));
 $("#restart").addEventListener("click", () => post("/api/restart", {}, "已重新开始"));
 
-$("#camera").href = "http://" + location.hostname + ":8180";  // camera-server 和 harness 同机，只有端口不同
+$("#miloco").href = "http://" + location.hostname + ":8180";  // miloco-server 和 harness 同机，只有端口不同
 
 fetch("/api/config").then((r) => r.json()).then(fillForm);
 poll();
