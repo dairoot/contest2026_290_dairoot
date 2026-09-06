@@ -317,20 +317,27 @@ class AIClient:
         """给页面的配置：附 SDK 引擎目录和当前麦克风列表。"""
         return {**self.config, "tts_engines": get_tts_engines(), "mics": input_devices()}
 
-    def status(self) -> dict:
+    def live_status(self) -> dict:
+        """会话跑着自己就会变的那几项，走 SSE 推给页面。"""
         return {
             "running": self.chat_bot is not None,
             "restarting": self.is_restarting,
             "session_closed": self.is_session_closed,
             "speaking": self.is_playing,
             "round": self.chat_bot.llm.round if self.chat_bot else 0,
+            "error": self.last_error,
+            "compression": self.compression_status(),
+        }
+
+    def status(self) -> dict:
+        """完整状态：live 的加上只在重启/保存配置后才变的（引擎、麦克风、MCP、技能）。"""
+        return {
+            **self.live_status(),
             "tts_engine": self.config["tts_engine"],
             "mic": self.mic_device,
-            "error": self.last_error,
             "mcp": self.mcp_status(),
             "skills": [{**skill, "enabled": self.config["skills"].get(skill["name"], True)} for skill in self.skills],
             "skills_dir": str(SKILLS_DIR),
-            "compression": self.compression_status(),
         }
 
     def compression_status(self) -> dict:

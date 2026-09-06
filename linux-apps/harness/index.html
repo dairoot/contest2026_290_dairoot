@@ -295,9 +295,11 @@ let lastSig = null;      // 消息没变就不重画，免得看到一半被刷�
 let systemOpen = false;  // 系统提示词的展开状态自己记着，重画后还原
 let compressOpen = false;  // 压缩摘要折叠块的展开状态，同上
 let jsonMode = false;    // MCP 配置的两种编辑方式：一行一个 server / 整段 JSON
-let skillsSig = null;    // 技能列表每秒轮一次，没变就不重建（重建会把展开的行收起来）
+let skillsSig = null;    // 技能列表重取时没变就不重建（重建会把展开的行收起来）
 let skillsDir = "";      // 技能目录，空态文案要用
 let busy = false;
+let fullState = {};  // 最近一次完整状态；SSE 只推会变的那几项，合并进来再画
+let messages = [];   // 当前 llm.messages；SSE 只推新增的，按 start 往后拼
 let sending = false;  // 发文本时禁用发送按钮，别连点发出重复的两句
 
 function el(tag, cls, text) {
@@ -504,17 +506,17 @@ async function installMcp(row, btn) {
   } finally {
     delete btn.dataset.busy;
     btn.disabled = false;
-    poll();  // 立刻按最新状态重画按钮和徽章，别等下一秒
+    loadState();  // 装完 MCP 包会重启重连，按最新状态重画按钮和徽章
   }
 }
 
 // SDK 默认注册、不在配置里的 server（如 aichat-tools）：只读展示连接状态和工具，不进 collectMcp；
 // 带 toggle 的行，工具列表里每个工具有启用勾选框，保存时收集成 aichat_tools 配置项提交
-let aichatTools = {};  // 开关的兜底值（{工具名: 是否启用}）：默认行是轮询建出来的，保存时可能还没建
+let aichatTools = {};  // 开关的兜底值（{工具名: 是否启用}）：默认行是取状态时建出来的，保存时可能还没建
 
 function collectAichatTools() {
   const boxes = document.querySelectorAll("#mcp-defaults .mcp-tool-enabled");
-  if (!boxes.length) return aichatTools;  // 行还没建出来（首次轮询前）就用配置里的值
+  if (!boxes.length) return aichatTools;  // 行还没建出来（首次取状态前）就用配置里的值
   const map = {};
   for (const box of boxes) map[box.dataset.tool] = box.checked;
   return map;
@@ -567,7 +569,7 @@ function addDefaultMcpRow(item) {
 
 function renderToolList(row, tools) {
   const sig = JSON.stringify(tools);
-  if (row.dataset.toolsSig === sig) return;  // 每秒轮一次，没变就别重建
+  if (row.dataset.toolsSig === sig) return;  // 重画时没变就别重建
   row.dataset.toolsSig = sig;
   row.querySelector(".mcp-tools").replaceChildren(
     ...tools.map((tool) => {
@@ -595,11 +597,11 @@ function renderToolList(row, tools) {
 
 // ---------------- skills ----------------
 // SKILLS_DIR 下扫出来的技能清单；每个技能一个启用勾选框，保存时收集成 skills 配置项提交，停用的不烘进系统提示词
-let skillToggles = {};  // 开关的兜底值（{技能名: 是否启用}）：行是轮询建出来的，保存时可能还没建
+let skillToggles = {};  // 开关的兜底值（{技能名: 是否启用}）：行是取状态时建出来的，保存时可能还没建
 
 function collectSkills() {
   const boxes = document.querySelectorAll("#skill-rows .mcp-enabled");
-  if (!boxes.length) return skillToggles;  // 行还没建出来（首次轮询前）就用配置里的值
+  if (!boxes.length) return skillToggles;  // 行还没建出来（首次取状态前）就用配置里的值
   const map = {};
   for (const box of boxes) map[box.dataset.skill] = box.checked;
   return map;
@@ -751,7 +753,7 @@ async function post(url, body, okText) {
     busy = false;
     $("#save").disabled = $("#restart").disabled = false;
     lastSig = null;
-    poll();
+    loadState();
   }
 }
 
@@ -769,9 +771,6 @@ function renderStatus(s) {
   if (comp.compressing) badges.push(["压缩上下文中…", "busy"]);
   else if (comp.summary) badges.push(["已压缩 " + comp.cursor + " 条", ""]);
   $("#badges").replaceChildren(...badges.map(([text, kind]) => el("span", "badge " + kind, text)));
-
-  renderMcpStatus(s.mcp || []);
-  renderSkills(s.skills || [], s.skills_dir);
 
   const banner = $("#banner");
   if (s.error) {
@@ -928,13 +927,17 @@ function renderMessages(msgs, comp) {
   if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
-async function poll() {
-  if (busy) return;  // 重启时服务端在忙，别堆请求
+// 完整状态只在页面加载、保存配置 / 重新开始、装完 MCP 包这几处取；跑起来会变的那部分走下面的 SSE
+async function loadState() {
   try {
     const data = await (await fetch("/api/state")).json();
-    renderStatus(data.status);
-    renderMessages(data.messages, data.status.compression);
-  } catch (e) { /* 进程没了，下次再试 */ }
+    fullState = data.status;
+    messages = data.messages;
+    renderStatus(fullState);
+    renderMcpStatus(fullState.mcp || []);
+    renderSkills(fullState.skills || [], fullState.skills_dir);
+    renderMessages(messages, fullState.compression);
+  } catch (e) { /* 进程没了，下次保存或重启时再取 */ }
 }
 
 for (const head of document.querySelectorAll(".group-head")) {
@@ -992,7 +995,6 @@ async function sendText() {
     const data = await res.json();
     if (data.ok) {
       box.value = "";
-      poll();  // 别等下一次轮询，发完立刻能在消息里看到自己这句
     } else {
       $("#send-note").textContent = data.error || "发送失败";
       $("#send-note").className = "err";
@@ -1028,8 +1030,19 @@ fetch("/api/config").then((r) => {
   $("#tts_engine").disabled = true;
   setNote("加载配置失败：" + error, false);
 });
-poll();
-setInterval(poll, 1000);
+loadState().then(() => {
+  // 会变的那部分由服务端推过来（变了才发一帧），代替原来每秒一次的 /api/state 轮询
+  const events = new EventSource("/api/events");
+  events.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    // 每帧只有 messages[start:]，接在自己这份后面；start 是 0 就是整份重来（新会话或首帧）
+    messages = messages.slice(0, data.start).concat(data.messages);
+    fullState = { ...fullState, ...data.status };
+    if (busy) return;  // 重启中的中间态（ChatBot 是 None，消息是空的）先收着不画，重启完会取完整状态
+    renderStatus(fullState);
+    renderMessages(messages, fullState.compression);
+  };
+});
 </script>
 </body>
 </html>
