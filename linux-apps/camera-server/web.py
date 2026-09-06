@@ -27,6 +27,7 @@ latest_frame = None
 # 拉的是 LOW 档码流，放大到 1080p 只是让后面的 cvtColor/imencode 为插值出来的像素买单
 HW_WIDTH, HW_HEIGHT = 0, 0
 Gst = None
+GstVideo = None
 gst_pipeline = None
 gst_appsrc = None  # 为 None 时表示没有硬解，回退到 PyAV 软解
 
@@ -108,6 +109,28 @@ HTML_PAGE = """
 """
 
 
+def nv12_from_buffer(buffer, info, width, height):
+    """把 VPU 的 NV12 buffer 取成紧凑的 (height*3/2, width) 数组。
+
+    VPU 写出来的每行是对齐过的——848 宽的帧实际每行 960 字节，右边是 padding；
+    帧高不是 16 的倍数时行数也会多出来。真实行宽和两个平面的偏移都在 GstVideoMeta
+    里，照它取再把 padding 切掉，按 caps 的 width/height 直接 reshape 会 ValueError。
+    """
+    meta = GstVideo.buffer_get_video_meta(buffer)
+    if meta is None:
+        # 理论上不会走到：带 padding 的 buffer 必须附 meta，否则下游没法解释它
+        y_stride = uv_stride = width
+        y_off, uv_off = 0, width * height
+    else:
+        y_stride, uv_stride = meta.stride[0], meta.stride[1]
+        y_off, uv_off = meta.offset[0], meta.offset[1]
+
+    buf = np.frombuffer(info.data, dtype=np.uint8)
+    y = buf[y_off : y_off + y_stride * height].reshape(height, y_stride)[:, :width]
+    uv = buf[uv_off : uv_off + uv_stride * (height // 2)].reshape(height // 2, uv_stride)[:, :width]
+    return np.vstack((y, uv))
+
+
 def on_hw_sample(sink):
     """GStreamer 线程回调：取出 VPU 产出的帧。"""
     global latest_frame
@@ -125,7 +148,7 @@ def on_hw_sample(sink):
             # YOLO 分支：VPU 出的是 NV12 裸帧，转成 BGR 后检测，再软编 JPEG
             caps = sample.get_caps().get_structure(0)
             width, height = caps.get_value("width"), caps.get_value("height")
-            nv12 = np.frombuffer(info.data, dtype=np.uint8).reshape(height * 3 // 2, width)
+            nv12 = nv12_from_buffer(buffer, info, width, height)
             bgr_frame = detect_and_draw(cv2.cvtColor(nv12, cv2.COLOR_YUV2BGR_NV12))
             _, buf = cv2.imencode(".jpg", bgr_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
             frame_data = buf.tobytes()
@@ -142,17 +165,19 @@ def on_hw_sample(sink):
 
 def init_hw_decoder():
     """尝试启动 Rockchip VPU 硬解流水线，不可用时返回 None。"""
-    global Gst, gst_pipeline
+    global Gst, GstVideo, gst_pipeline
 
     try:
         import gi
 
         gi.require_version("Gst", "1.0")
+        gi.require_version("GstVideo", "1.0")
         from gi.repository import Gst as _Gst
+        from gi.repository import GstVideo as _GstVideo
     except (ImportError, ValueError):
         return None
 
-    Gst = _Gst
+    Gst, GstVideo = _Gst, _GstVideo
     Gst.init(None)
     if Gst.ElementFactory.make("mppvideodec") is None:
         return None
