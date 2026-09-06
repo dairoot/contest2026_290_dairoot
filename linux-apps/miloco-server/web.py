@@ -409,12 +409,20 @@ async def run():
             print(f"未找到 did 为 {env_did} 的在线设备")
             return
     else:
-        index = input("请输入摄像头设备序号: ")
-        try:
-            device_info = online_devices[int(index) - 1]
-        except Exception as e:
-            print(f"输入错误: {e}")
-            return
+        while True:
+            try:
+                index = int(input("请输入摄像头设备序号: "))
+            except ValueError:
+                print(f"输入无效，请输入 1～{len(online_devices)} 之间的整数")
+                continue
+            except EOFError:
+                print("\n输入已结束，退出设备选择")
+                return
+            if not 1 <= index <= len(online_devices):
+                print(f"序号超出范围，请输入 1～{len(online_devices)} 之间的整数")
+                continue
+            device_info = online_devices[index - 1]
+            break
 
     camera_name = device_info.get("name", "")
 
