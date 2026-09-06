@@ -39,6 +39,24 @@ gst_appsrc = None  # 为 None 时表示没有硬解，回退到 PyAV 软解
 INDEX_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 
+def rockchip_soc() -> str:
+    """在 Rockchip 板子上返回芯片名（rk3576），其他机器返回空串。
+
+    /proc/device-tree/compatible 是 NUL 分隔的一串，板子上是
+    "rockchip,rk3576-evb1-v10\0rockchip,rk3576"；Mac / x86 上根本没有这个文件。
+    """
+    try:
+        with open("/proc/device-tree/compatible", "rb") as f:
+            entries = f.read().decode().split("\0")
+    except OSError:
+        return ""
+    for entry in entries:
+        vendor, _, soc = entry.partition(",")
+        if vendor == "rockchip" and soc and "-" not in soc:  # 带 -evb1-v10 的是板型不是芯片
+            return soc
+    return ""
+
+
 def nv12_from_buffer(buffer, info, width, height):
     """把 VPU 的 NV12 buffer 取成紧凑的 (height*3/2, width) 数组。
 
@@ -94,7 +112,7 @@ def on_hw_sample(sink):
 
 
 def init_hw_decoder():
-    """尝试启动 Rockchip VPU 硬解流水线，不可用时返回 None。"""
+    """尝试启动 Rockchip VPU 硬解流水线，不可用时打出卡在哪一步并返回 None。"""
     global Gst, GstVideo, gst_pipeline
 
     try:
@@ -104,12 +122,15 @@ def init_hw_decoder():
         gi.require_version("GstVideo", "1.0")
         from gi.repository import Gst as _Gst
         from gi.repository import GstVideo as _GstVideo
-    except (ImportError, ValueError):
+    except (ImportError, ValueError) as e:
+        # 板子上 python3-gi 是 apt 装在系统 python 里的，venv 不放行系统包就 import 不到
+        print(f"硬解不可用：GStreamer 的 Python 绑定导不进来（{e}）")
         return None
 
     Gst, GstVideo = _Gst, _GstVideo
     Gst.init(None)
     if Gst.ElementFactory.make("mppvideodec") is None:
+        print("硬解不可用：GStreamer 里没有 mppvideodec 元件（缺 gstreamer1.0-rockchip1）")
         return None
 
     # 有 YOLO 时要拿裸帧做检测，否则让 VPU 顺手把 JPEG 也编好
@@ -299,7 +320,21 @@ async def device_power_handler(request):
 
 
 async def run():
-    global xiaomi_client
+    global camera_name, gst_appsrc, xiaomi_client
+
+    # 硬解放在最前面：板子上没有 VPU 就不该往下走，别等登录、挑完设备才报错
+    gst_appsrc = init_hw_decoder()
+    if gst_appsrc is None:
+        soc = rockchip_soc()
+        if soc:
+            # 板子的 CPU 软解扛不住这路码流（当初上 VPU 就是为这个），与其让画面一直卡着不如不起
+            raise SystemExit(
+                f"这是 {soc}，VPU 硬解没起来，拒绝用 CPU 软解启动。按上面那行原因排查：\n"
+                "  venv 没放行系统包的话重建：uv venv --python 3.12 --system-site-packages && uv sync\n"
+                "  元件在不在：gst-inspect-1.0 mppvideodec"
+            )
+        print("未检测到 Rockchip VPU（mppvideodec），回退到 CPU 软解，高分辨率下可能卡顿")
+
     client = xiaomi_client = XiaomiClient()
     client.login()
     device_list = client.home.get_device_list()
@@ -325,11 +360,7 @@ async def run():
             print(f"输入错误: {e}")
             return
 
-    global camera_name, gst_appsrc
     camera_name = device_info.get("name", "")
-    gst_appsrc = init_hw_decoder()
-    if gst_appsrc is None:
-        print("未检测到 Rockchip VPU（mppvideodec），回退到 CPU 软解，高分辨率下可能卡顿")
 
     # 创建 web 应用
     app = web.Application()
