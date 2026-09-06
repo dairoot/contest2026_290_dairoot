@@ -169,7 +169,8 @@ sudo cp /usr/lib/librknnrt.so /usr/lib/librknnrt.so.bak && sudo cp librknnrt.so 
 
 #### 在哪台机器上转：Ubuntu，不是 Mac
 
-**ASR 和声纹两个模型都在 Ubuntu x86_64 上转**（手上这台是 `ssh ubt`，19 GB 内存），
+**ASR 和声纹两个模型都在 Ubuntu x86_64 上转**（手上这台是一台公网 Ubuntu 服务器，
+SSH 别名配成了 `ubt`，下文的 `ssh ubt` / `scp ubt:` 都是它，19 GB 内存），
 转完把 `.rknn` scp 回板子。
 
 | 机器 | 能不能转 |
@@ -196,7 +197,9 @@ SPEAKER_BACKEND=modelscope uv run --with onnx --with onnxscript \
 ```
 
 导出那步必须带 `SPEAKER_BACKEND=modelscope`，否则 `import speaker` 会去加载还不存在
-的 `.rknn`（板子上 `.env` 默认是 `rknn`）。
+的 `.rknn`（板子上 `.env` 默认是 `rknn`）。板子上的 `~/rknn-venv` 已经装好了
+（rknn-toolkit2 2.3.2 + onnx 1.16.1，torch 是 aarch64 上的 2.2.0——rknn-toolkit2 只要求
+`torch<=2.4.0`，下面第 2 步钉 2.4.0 是 x86 那台的写法），不用照第 2 步再建一遍。
 
 #### 第 1 步：导出定长 fp32 ONNX
 
@@ -250,8 +253,20 @@ uv pip install --python ~/rknn-venv/bin/python rknn-toolkit2==2.3.2 "setuptools<
 
 #### 第 3 步：放到板子上并验证
 
+`config.py` 默认按**本目录**找模型（`<asr-server>/rknn_models/`），所以放到板子上
+仓库里的同名目录即可：
+
 ```bash
-scp rknn_models/*.rknn kickpi@<板子IP>:~/asr_server/rknn_models/
+BOARD=src/contest2026_290_dairoot/linux-apps/asr-server/rknn_models/   # scp 的远端相对路径以家目录为基准
+scp rknn_models/*.rknn kickpi@<板子IP>:$BOARD
+```
+
+转换机在公网、板子在内网时（上面那台 Ubuntu 服务器 `ubt` 就是这种情况，它到不了
+192.168 的板子），经开发机中转一道：
+
+```bash
+scp ubt:<转换目录>/rknn_models/*.rknn /tmp/     # 转换机 -> 开发机
+scp /tmp/*.rknn kickpi@<板子IP>:$BOARD          # 开发机 -> 板子
 ```
 
 路径可以用 `ASR_RKNN_PATH` / `SPEAKER_RKNN_PATH` 改。板子上确认能跑：
