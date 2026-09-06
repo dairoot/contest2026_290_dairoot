@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>miloco 设备面板</title>
+<style>
+/* 配色和控件照搬 harness/index.html，两个页面来回切不会有割裂感 */
+:root {
+  --bg:#f4f6f8; --card:#fff; --fg:#1b1e23; --muted:#6b7280; --line:#e2e6ea;
+  --accent:#2563eb; --ok:#16a34a; --err:#dc2626;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#15171a; --card:#1d2024; --fg:#e6e8eb; --muted:#9aa1a9; --line:#2c3036;
+    --accent:#4b8bf5; --ok:#4ade80; --err:#f87171;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--fg);
+  font:14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+header {
+  position:sticky; top:0; z-index:2; display:flex; align-items:center; flex-wrap:wrap; gap:8px;
+  padding:12px 18px; background:var(--card); border-bottom:1px solid var(--line);
+}
+h1 { font-size:15px; margin:0 4px 0 0; }
+h2 { font-size:13px; margin:0; }
+.badge { font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line); color:var(--muted); }
+main { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:16px; padding:16px; align-items:start; }
+@media (max-width:900px) { main { grid-template-columns:1fr; } }  /* 窄屏改单列：画面在上，设备在下 */
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+.card-head { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
+.count { color:var(--muted); font-size:12px; }
+button {
+  font:inherit; font-size:12px; padding:3px 10px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--line); background:var(--card); color:var(--fg);
+}
+button:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
+button:disabled { opacity:.5; cursor:default; }
+#refresh { margin-left:auto; }
+#video { padding:10px; }
+#stream { display:block; width:100%; border-radius:6px; background:#000; }
+.dev { display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--line); }
+.dev:first-child { border-top:0; }
+.dev-main { flex:1; min-width:0; }  /* min-width:0 才允许里面的长名字被省略号截断 */
+.dev-name, .dev-sub { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dev-sub { font-size:12px; color:var(--muted); }
+.dev-sub.err { color:var(--err); }
+.switch { flex:none; position:relative; width:40px; height:22px; }
+.switch input { position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:pointer; }
+.switch input:disabled { cursor:default; }
+.track { position:absolute; inset:0; border-radius:99px; background:var(--line); transition:background .15s; pointer-events:none; }
+.track::after {
+  content:""; position:absolute; top:3px; left:3px; width:16px; height:16px;
+  border-radius:50%; background:var(--card); box-shadow:0 1px 2px rgba(0,0,0,.3); transition:transform .15s;
+}
+.switch input:checked + .track { background:var(--ok); }
+.switch input:checked + .track::after { transform:translateX(18px); }
+.switch input:disabled + .track { opacity:.45; }
+.empty { color:var(--muted); font-size:13px; padding:8px 0; }
+.empty.err { color:var(--err); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>miloco 设备面板</h1>
+  __BADGES__
+</header>
+
+<main>
+  <section class="card" id="video">
+    <img id="stream" alt="实时画面">
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h2>米家设备</h2>
+      <span class="count" id="count"></span>
+      <button id="refresh">刷新</button>
+    </div>
+    <div id="devices"><div class="empty">加载中…</div></div>
+  </section>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+// ---------------- 视频流 ----------------
+
+const stream = $("#stream");
+let reconnect;
+stream.onerror = () => {  // 摄像头断流或服务重启后自己接回来
+  clearTimeout(reconnect);
+  reconnect = setTimeout(() => { stream.src = "/video_feed?t=" + Date.now(); }, 2000);
+};
+stream.onload = () => clearTimeout(reconnect);
+stream.src = "/video_feed?t=" + Date.now();
+
+// ---------------- 设备 ----------------
+
+async function api(path, body) {
+  const res = await fetch(path, body ? {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  } : undefined);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+async function eachLimit(items, limit, fn) {  // 简易并发窗口
+  const queue = items.slice();
+  await Promise.all(Array.from({ length: limit }, async () => {
+    while (queue.length) await fn(queue.shift());
+  }));
+}
+
+function makeRow(dev) {
+  const row = el("div", "dev");
+  const sub = el("div", "dev-sub", "读取状态…");
+  const main = el("div", "dev-main");
+  main.append(el("div", "dev-name", dev.name || dev.did), sub);
+
+  const input = el("input");
+  input.type = "checkbox";
+  input.disabled = true;  // 状态没读到之前不给点
+  const label = el("label", "switch");
+  label.append(input, el("span", "track"));
+  row.append(main, label);
+
+  const desc = [dev.room, dev.model].filter(Boolean).join(" · ");
+  // 出错的原文（未能定位主开关那条尤其长）塞进 title，行内只留一句短的。
+  // 红色只留给「操作失败」，不能开关本身不是故障，标红整页都是红的
+  const note = (text, isErr, full) => {
+    sub.textContent = text;
+    sub.className = "dev-sub" + (isErr ? " err" : "");
+    sub.title = full || "";
+  };
+
+  const load = async () => {
+    try {
+      const { power } = await api("/device/power?did=" + encodeURIComponent(dev.did));
+      if (power === null) { note("读不到开关状态"); return; }
+      input.checked = power;
+      input.disabled = false;
+      note(desc);
+    } catch (e) {
+      // 传感器、网关、摄像头自己都没有可写的 on 属性，在列表里还占多数，这是常态不是故障
+      const unsupported = e.message.includes("未能定位主开关");
+      note(unsupported ? "不支持开关" : e.message, !unsupported, e.message);
+    }
+  };
+
+  input.onchange = async () => {
+    const want = input.checked;
+    input.disabled = true;
+    note(want ? "打开中…" : "关闭中…");
+    try {
+      const { power } = await api("/device/power", { did: dev.did, action: want ? "on" : "off" });
+      input.checked = !!power;  // 以回读的真实状态为准，而不是以点了什么为准
+      note(desc);
+    } catch (e) {
+      input.checked = !want;
+      note(e.message, true, e.message);
+    }
+    input.disabled = false;
+  };
+
+  return { row, load };
+}
+
+async function loadDevices() {
+  const box = $("#devices");
+  const btn = $("#refresh");
+  btn.disabled = true;
+  box.replaceChildren(el("div", "empty", "加载中…"));
+  $("#count").textContent = "";
+
+  let devices;
+  try {
+    devices = await api("/devices");
+  } catch (e) {
+    box.replaceChildren(el("div", "empty err", "设备列表加载失败：" + e.message));
+    btn.disabled = false;
+    return;
+  }
+  if (!devices.length) {
+    box.replaceChildren(el("div", "empty", "暂无在线设备"));
+    btn.disabled = false;
+    return;
+  }
+
+  const rows = devices.map(makeRow);
+  box.replaceChildren(...rows.map((r) => r.row));
+  $("#count").textContent = devices.length + " 台在线";
+  // 每台设备的状态都是一次米家云请求，首次还要拉 spec（超时 10s）。全部并发发出去会占满
+  // 服务端线程池，板子上还得给视频流留 CPU，所以限 3 路。
+  await eachLimit(rows, 3, (r) => r.load());
+  btn.disabled = false;
+}
+
+$("#refresh").onclick = loadDevices;
+loadDevices();
+</script>
+</body>
+</html>
