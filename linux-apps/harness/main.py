@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(BASE_DIR)))  # aichat_sdk
 
 from server import serve
 
-from aichat_sdk import ChatBot
+from aichat_sdk import ChatBot, DEFAULT_TTS_ENGINE, get_tts_engines
 from aichat_sdk.config import DEFAULT_AGENT_SOUL
 from aichat_sdk.llm import mcp as sdk_mcp
 from aichat_sdk.llm.mcp import (
@@ -58,11 +58,10 @@ SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")  # 每轮会话结束后把完
 WEB_HOST = "0.0.0.0"  # 注意：页面能改外部 MCP server 的启动命令（等于能在本机拉进程），绑 0.0.0.0 后同网段都能访问
 WEB_PORT = 8080
 OUTPUT_SAMPLE_RATE = 24000  # 采样率不放到页面上配，扬声器流建一次就一直用
-TTS_ENGINES = ["bytedance", "v3", "edge"]
 PIP_INSTALL_TIMEOUT = 300  # 秒；pip 卡在网络上别让「安装中」永远转下去
 
 DEFAULT_CONFIG = {
-    "tts_engine": "bytedance",
+    "tts_engine": DEFAULT_TTS_ENGINE,
     "mic": "",  # 拾音设备名，空 = 系统默认输入设备
     "send_idle_farewell": False,
     "tool_thinking": True,
@@ -124,6 +123,12 @@ def load_config() -> dict:
             config.update(json.load(f))
     else:
         config.update(detect_location())
+    # SDK 0.1.1 重命名了豆包引擎；兼容旧页面保存的名称。
+    # v2 / bytedancev2 在新 SDK 中仍有效，不能按旧含义重写。
+    engine = str(config["tts_engine"]).strip().lower()
+    config["tts_engine"] = {
+        "bytedance": "bytedancev1", "v3": "bytedancev2", "bytedancev3": "bytedancev2",
+    }.get(engine, engine)
     for key in ("aichat_tools", "skills"):  # 兼容手改坏的配置
         if not isinstance(config.get(key), dict):
             config[key] = {}
@@ -239,9 +244,12 @@ def validate_config(raw: dict) -> dict:
     if not isinstance(raw, dict):
         raise ValueError("配置必须是 JSON 对象")
 
-    engine = str(raw.get("tts_engine", "")).strip()
-    if engine not in TTS_ENGINES:
-        raise ValueError(f"tts_engine 只能是：{'、'.join(TTS_ENGINES)}")
+    engine = str(raw.get("tts_engine", "")).strip().lower()
+    engines = get_tts_engines()
+    match = next((item for item in engines if engine == item["name"] or engine in item["aliases"]), None)
+    if match is None:
+        raise ValueError(f"tts_engine 只能是：{'、'.join(item['name'] for item in engines)}")
+    engine = match["name"]
 
     soul = str(raw.get("soul", "")).strip()
     if not soul:
@@ -306,8 +314,8 @@ class AIClient:
     # ---------------- web 层用到的接口 ----------------
 
     def config_payload(self) -> dict:
-        """给页面的配置：再挂一份当前的麦克风列表（每次重新扫，插拔的设备刷新一下页面就能选到）。"""
-        return {**self.config, "mics": input_devices()}
+        """给页面的配置：附 SDK 引擎目录和当前麦克风列表。"""
+        return {**self.config, "tts_engines": get_tts_engines(), "mics": input_devices()}
 
     def status(self) -> dict:
         return {

@@ -2,6 +2,15 @@
 
 在本目录运行 `uv run main.py`，配置台位于 `http://<板子 IP>:8080`。
 
+TTS 引擎选项从 SDK 的 `get_tts_engines()` 动态加载，要求 `aichat-sdk>=0.1.1`。
+当前可选豆包 v1/v2、微软 Edge 和小米 MiMo；选择后保存配置即重启生效。
+MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mimo_default`）
+和 `MIMO_TTS_INSTRUCTIONS`。
+
+旧页面保存的 `bytedance`、`v3` 启动时分别迁移为 `bytedancev1`、`bytedancev2`，
+保存后写回 `config.json`。若曾手动填写 SDK 0.1.0 的 `v2` / `bytedancev2`，
+升级后需改选 `bytedancev1` 才能保持原引擎；SDK 0.1.1 的 `v2` 现在指豆包 v2。
+
 本地 MCP 服务脚本集中放在 `mcp/`：
 
 - `mcp/miloco_mcp.py`：米家设备和摄像头，读取 harness 根目录的 `.env`。
