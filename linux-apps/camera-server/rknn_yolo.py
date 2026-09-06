@@ -17,19 +17,22 @@ IMG_SIZE = 640
 OBJ_THRESH = 0.25
 NMS_THRESH = 0.45
 
-# CLASSES = (
-#     "person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck", "boat", "traffic light",
-#     "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-#     "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-#     "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
-#     "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
-#     "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "sofa",
-#     "pottedplant", "bed", "diningtable", "toilet", "tvmonitor", "laptop", "mouse", "remote", "keyboard",
-#     "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
-#     "scissors", "teddy bear", "hair drier", "toothbrush",
-# )
+# 模型是 COCO 80 类的，输出的类别下标要照这张表查，不能删条目
+CLASSES = (
+    "person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck", "boat", "traffic light",
+    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+    "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "sofa",
+    "pottedplant", "bed", "diningtable", "toilet", "tvmonitor", "laptop", "mouse", "remote", "keyboard",
+    "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
+    "scissors", "teddy bear", "hair drier", "toothbrush",
+)
 
-CLASSES = ("person", "bed", "cell phone", "cat")
+# 只保留这几类，其余类别的通道在解码时就丢掉
+KEEP = ("person", "bed", "cell phone", "cat")
+KEEP_IDS = np.array([CLASSES.index(c) for c in KEEP])
 
 
 def _decode_branch(box_out, cls_out):
@@ -41,7 +44,7 @@ def _decode_branch(box_out, cls_out):
     grid_h, grid_w = cls_out.shape[2:4]
     stride = IMG_SIZE // grid_h
 
-    cls = cls_out.transpose(0, 2, 3, 1).reshape(-1, cls_out.shape[1])
+    cls = cls_out.transpose(0, 2, 3, 1).reshape(-1, cls_out.shape[1])[:, KEEP_IDS]
     scores = cls.max(axis=1)
     idx = np.where(scores >= OBJ_THRESH)[0]
     if idx.size == 0:
@@ -56,7 +59,7 @@ def _decode_branch(box_out, cls_out):
 
     grid = np.stack((idx % grid_w, idx // grid_w), axis=1) + 0.5
     xyxy = np.concatenate(((grid - dist[:, 0:2]) * stride, (grid + dist[:, 2:4]) * stride), axis=1)
-    return xyxy, cls[idx].argmax(axis=1), scores[idx]
+    return xyxy, KEEP_IDS[cls[idx].argmax(axis=1)], scores[idx]
 
 
 def _nms(boxes, scores):
