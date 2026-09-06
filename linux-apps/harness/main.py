@@ -21,7 +21,7 @@ import numpy as np
 import sounddevice as sd
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 logging.basicConfig(
     level=logging.INFO,
