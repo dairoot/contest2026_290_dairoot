@@ -216,10 +216,8 @@ details.thinking pre { color:var(--muted); }
         <div class="group-head"><span class="group-arrow">▶</span><h2>基础设置</h2></div>
         <div class="group-body">
           <label><span>TTS 引擎</span>
-            <select id="tts_engine">
-              <option value="bytedance">bytedance（豆包 v2，24k）</option>
-              <option value="v3">v3（豆包 v3，24k）</option>
-              <option value="edge">edge（微软在线，24k）</option>
+            <select id="tts_engine" disabled>
+              <option value="">加载中…</option>
             </select>
           </label>
 
@@ -662,6 +660,31 @@ function renderSkillRow(skill) {
 
 // ---------------- 配置 ----------------
 
+function fillTtsOptions(engines, current) {
+  const items = Array.isArray(engines) ? engines : [];
+  const select = $("#tts_engine");
+  const value = (current || "").trim().toLowerCase();
+  const selected = items.find((item) => item.name === value || (item.aliases || []).includes(value));
+  const fallback = items.find((item) => item.default) || items[0];
+  select.replaceChildren(...items.map((item) => {
+    const option = el("option", "", item.label || item.name);
+    option.value = item.name;
+    return option;
+  }));
+  if (value && !selected) {
+    const option = el("option", "", current + "（当前 SDK 不支持，请重新选择）");
+    option.value = value;
+    option.disabled = true;
+    select.append(option);
+  } else if (!items.length) {
+    const option = el("option", "", "暂无可用的 TTS 引擎");
+    option.value = "";
+    select.append(option);
+  }
+  select.value = selected ? selected.name : (value || (fallback && fallback.name) || "");
+  select.disabled = !items.length;
+}
+
 function fillMicOptions(mics, current) {
   const names = Array.isArray(mics) ? mics.slice() : [];
   // 配的设备现在不在了（拔了/改名了）也留一条，不然下拉里选不中它，看着像没保存上
@@ -675,7 +698,7 @@ function fillMicOptions(mics, current) {
 }
 
 function fillForm(cfg) {
-  $("#tts_engine").value = cfg.tts_engine || "bytedance";
+  fillTtsOptions(cfg.tts_engines, cfg.tts_engine);
   fillMicOptions(cfg.mics, cfg.mic || "");
   $("#city").value = cfg.city || "";
   $("#timezone").value = cfg.timezone ?? 8;
@@ -997,7 +1020,14 @@ $("#restart").addEventListener("click", () => post("/api/restart", {}, "已重�
 
 $("#miloco").href = "http://" + location.hostname + ":8180";  // miloco-server 和 harness 同机，只有端口不同
 
-fetch("/api/config").then((r) => r.json()).then(fillForm);
+fetch("/api/config").then((r) => {
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}).then(fillForm).catch((error) => {
+  $("#tts_engine").replaceChildren(el("option", "", "加载失败，请刷新"));
+  $("#tts_engine").disabled = true;
+  setNote("加载配置失败：" + error, false);
+});
 poll();
 setInterval(poll, 1000);
 </script>

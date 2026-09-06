@@ -1,7 +1,7 @@
 """web 配置台的 HTTP 层：一个页面 + 六个接口 + 一个录音代理，只跟 AIClient 打交道。
 
 - GET  /             页面
-- GET  /api/config   当前配置 + 可选的麦克风列表（页面加载时填表单，之后不再轮询，免得覆盖正在编辑的内容）
+- GET  /api/config   当前配置 + SDK 的 TTS 引擎目录 + 麦克风列表（页面加载时填表单，之后不再轮询，免得覆盖正在编辑的内容）
 - POST /api/config   保存配置并按新配置重建 ChatBot
 - POST /api/restart  用当前配置重开一轮会话
 - POST /api/send     发一句文本给 ChatBot（等同说话，照样会出声）
