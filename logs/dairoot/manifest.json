@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "team_id": "contest2026_290_dairoot",
   "github_login": "dairoot",
-  "generator": "claude-code-collector@1.3.0",
+  "generator": "codex-collector@1.3.0",
   "sessions": [
     {
       "session_id": "946a5a2b-b687-49d5-8142-9b5728174c11",
@@ -135,7 +135,27 @@
       "collection_mode": "cli",
       "health": "ok",
       "model": "claude-opus-5"
+    },
+    {
+      "session_id": "01a07675-177e-7b72-9b44-f949380a2e3f",
+      "tool": "codex",
+      "started_at": "2026-09-06T11:23:00.371Z",
+      "last_event_at": "2026-09-06T11:56:36.330Z",
+      "event_count": 75,
+      "raw_event_count": 190,
+      "file_path": "logs/dairoot/2026-09-06/codex__01a07675-177e-7b72-9b44-f949380a2e3f.jsonl",
+      "collection_mode": "cli",
+      "source_interface": "codex-desktop",
+      "health": "ok",
+      "model": "gpt-6-astra",
+      "tokens_total": 1319262,
+      "redacted_count_total": 0,
+      "format_adapter": "codex-response-item-to-contest-v1",
+      "source_file": "rollout-2026-09-06T19-23-00-01a07675-177e-7b72-9b44-f949380a2e3f.jsonl",
+      "source_snapshot_sha256": "111fee0ef22a011fa857d016ae3c793dd5ea56fbcc1ed9f9db68bb59c97f3ffa",
+      "snapshot_through_ordinal": 189,
+      "export_scope": "User/assistant dialogue, tool calls/results and token usage through the user submission request; excludes automatic environment setup and internal runtime records."
     }
   ],
-  "updated_at": "2026-09-06T10:09:54.920841+00:00"
+  "updated_at": "2026-09-06T12:01:23.578Z"
 }
