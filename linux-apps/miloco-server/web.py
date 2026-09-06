@@ -376,12 +376,21 @@ if __name__ == "__main__":
             detect_and_draw = RknnYolo().detect_and_draw
             print("YOLO 跑在 RK3576 NPU 上")
         except (ImportError, RuntimeError) as e:
-            from ultralytics import YOLO
+            # 先把 NPU 为什么不行打出来再去试回退：板子上按 ARMv8.0 故意没装 ultralytics，
+            # 回退这一步必炸，原来的写法会让「加载模型失败: yolo11n_int8.rknn」这句真正的
+            # 原因被 ModuleNotFoundError 顶掉，看着像缺包，其实是模型文件没放上去
+            print(f"NPU 不可用：{e}")
+            try:
+                from ultralytics import YOLO
 
-            _yolo = YOLO("yolo11n.pt")
+                _yolo = YOLO("yolo11n.pt")
 
-            def detect_and_draw(frame):
-                return _yolo(frame, verbose=False)[0].plot()
+                def detect_and_draw(frame):
+                    return _yolo(frame, verbose=False)[0].plot()
 
-            print(f"NPU 不可用（{e}），YOLO 回退到 ultralytics")
+                print("YOLO 回退到 ultralytics")
+            except ImportError:
+                # 检测没了流还得推，别让整个服务起不来；页头徽章会如实显示没开 YOLO
+                print("ultralytics 也没有（板子上不装：torch 的 aarch64 wheel 按 ARMv8.2+ 编，一跑卷积就 SIGILL）")
+                print("本次不做检测，只推流。要检测就把 yolo11n_int8.rknn 放到本目录再起")
     asyncio.run(run())
