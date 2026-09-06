@@ -2,6 +2,7 @@ import asyncio
 import io
 import os
 import sys
+from html import escape
 from queue import Queue
 from threading import Lock
 
@@ -22,6 +23,8 @@ detect_and_draw = None  # yolo 模式下为检测函数：吃 BGR 帧，返回�
 frame_queue = Queue(maxsize=2)
 frame_lock = Lock()
 latest_frame = None
+xiaomi_client = None  # 登录后的 SDK client，设备列表 / 开关接口用它
+camera_name = ""  # 正在拉流的摄像头名字，页头徽章用
 
 # Rockchip VPU 硬解输出尺寸（VPU 内部用 RGA 缩放），设成 0 表示保持摄像头原始分辨率。
 # 拉的是 LOW 档码流，放大到 1080p 只是让后面的 cvtColor/imencode 为插值出来的像素买单
@@ -31,82 +34,9 @@ GstVideo = None
 gst_pipeline = None
 gst_appsrc = None  # 为 None 时表示没有硬解，回退到 PyAV 软解
 
-# HTML 页面模板
-HTML_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>小米摄像头 - HEVC 视频流</title>
-    <style>
-        html, body {
-            margin: 0;
-            padding: 0;
-            height: 100vh;
-            width: 100vw;
-            overflow: hidden;
-            background-color: #1a1a1a;
-            color: #fff;
-            font-family: Arial, sans-serif;
-            display: flex;
-            flex-direction: column;
-        }
-        h1 {
-            text-align: center;
-            margin: 10px 0;
-            padding: 0 20px;
-            flex-shrink: 0;
-            font-size: 1.5em;
-        }
-        #video-container {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background-color: #000;
-            padding: 10px;
-            margin: 0 10px 10px 10px;
-            border-radius: 8px;
-            min-height: 0;
-            overflow: hidden;
-        }
-        img {
-            max-width: 100%;
-            max-height: 100%;
-            width: auto;
-            height: auto;
-            object-fit: contain;
-            border-radius: 4px;
-        }
-    </style>
-</head>
-<body>
-    <h1>小米摄像头 - HEVC 视频流 (YOLO 检测)</h1>
-    <div id="video-container">
-        <img id="video-stream" src="/video_feed" alt="视频流">
-    </div>
-    <script>
-        // MJPEG 流处理
-        const img = document.getElementById('video-stream');
-        let reconnectTimeout;
-
-        img.onerror = function() {
-            console.log('视频流加载错误，尝试重新连接...');
-            clearTimeout(reconnectTimeout);
-            reconnectTimeout = setTimeout(() => {
-                img.src = '/video_feed?t=' + new Date().getTime();
-            }, 2000);
-        };
-
-        img.onload = function() {
-            clearTimeout(reconnectTimeout);
-        };
-
-        // 初始加载
-        img.src = '/video_feed?t=' + new Date().getTime();
-    </script>
-</body>
-</html>
-"""
+# 页面模板放在同目录的 index.html 里，改 UI 不用动 Python。每次请求现读，
+# 板子上调样式存盘刷新就行，不用重启（顺带丢掉进程内的一份缓存，文件才 10K）
+INDEX_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
 
 
 def nv12_from_buffer(buffer, info, width, height):
@@ -232,8 +162,19 @@ async def on_raw_video(did: str, data: bytes, ts: int, seq: int, channel: int):
 
 
 async def index_handler(request):
-    """返回 HTML 页面"""
-    return web.Response(text=HTML_PAGE, content_type="text/html")
+    """返回 HTML 页面。
+
+    页头几个徽章按进程实际情况现渲染：硬解还是软解、开没开 YOLO 都是启动时才定的，
+    写死在模板里必然有对不上的时候（原来的标题就一直挂着「YOLO 检测」）。
+    """
+    badges = [f"📷 {camera_name}" if camera_name else "📷 未选设备"]
+    badges.append("VPU 硬解" if gst_appsrc is not None else "CPU 软解")
+    if detect_and_draw:
+        badges.append("YOLO 检测")
+    with open(INDEX_HTML, encoding="utf-8") as f:
+        html = f.read()
+    html = html.replace("__BADGES__", "".join(f'<span class="badge">{escape(b)}</span>' for b in badges))
+    return web.Response(text=html, content_type="text/html")
 
 
 async def video_feed_handler(request):
@@ -288,8 +229,78 @@ async def video_feed_handler(request):
     return response
 
 
+async def devices_handler(request):
+    """在线设备列表，did 用于调 /device/power"""
+    device_list = await asyncio.to_thread(xiaomi_client.home.get_device_list)
+    return web.json_response(
+        [
+            {
+                "did": d.get("did"),
+                "name": d.get("name"),
+                "model": d.get("model"),
+                "room": d.get("room_name"),
+            }
+            for d in device_list
+            if d.get("isOnline", False)
+        ]
+    )
+
+
+async def device_state_handler(request):
+    """读设备当前开关状态：GET /device/power?did=xxx
+
+    页面上每行的开关得先知道现在是开是关才能摆对位置。读不到（设备不支持、离线）
+    时 power 为 null，前端把那一行置灰。
+    """
+    did = request.query.get("did")
+    if not did:
+        return web.json_response({"error": "需要 did"}, status=400)
+    try:
+        power = await asyncio.to_thread(xiaomi_client.device.get_power, did)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+    return web.json_response({"did": did, "power": power})
+
+
+async def device_power_handler(request):
+    """设备开关：POST {"did": "xxx", "action": "on" | "off" | "toggle"}
+
+    不传 siid/piid，SDK 按 spec 自动定位主开关（插座的指示灯、倒计时那些不会被误选）；
+    多路开关想指定某一路，得先 find_switch_list 查出来再显式传，这里不做。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    did, action = body.get("did"), body.get("action")
+    if not did or action not in ("on", "off", "toggle"):
+        return web.json_response({"error": '需要 did 和 action（"on" / "off" / "toggle"）'}, status=400)
+
+    device = xiaomi_client.device
+    try:
+        # SDK 是同步的（requests 调米家云，首次还要拉 spec，超时 10s），必须扔线程里跑：
+        # 卡在事件循环上视频流会跟着断，硬解那条路还会把码流回调一起堵死
+        if action == "toggle":
+            # 反转得先知道现在是什么。SDK 的 toggle 内部也是这么读一次，自己读只是为了拿到结果值
+            current = await asyncio.to_thread(device.get_power, did)
+            if current is None:
+                return web.json_response({"error": f"读不到当前开关状态（设备可能离线），did={did}"}, status=400)
+            action = "off" if current else "on"
+
+        on = action == "on"
+        await asyncio.to_thread(device.turn_on if on else device.turn_off, did)
+    except Exception as e:
+        # 设备离线、不支持开关、定位不到主开关都走这里，消息直接透给调用方
+        return web.json_response({"error": str(e)}, status=400)
+
+    # 下发失败 set_prop 会抛（上面已经拦住），走到这里状态就是刚写进去的值，不用再查一次
+    return web.json_response({"did": did, "power": on})
+
+
 async def run():
-    client = XiaomiClient()
+    global xiaomi_client
+    client = xiaomi_client = XiaomiClient()
     client.login()
     device_list = client.home.get_device_list()
     online_devices = [d for d in device_list if d.get("isOnline", False)]
@@ -314,7 +325,8 @@ async def run():
             print(f"输入错误: {e}")
             return
 
-    global gst_appsrc
+    global camera_name, gst_appsrc
+    camera_name = device_info.get("name", "")
     gst_appsrc = init_hw_decoder()
     if gst_appsrc is None:
         print("未检测到 Rockchip VPU（mppvideodec），回退到 CPU 软解，高分辨率下可能卡顿")
@@ -323,6 +335,9 @@ async def run():
     app = web.Application()
     app.router.add_get("/", index_handler)
     app.router.add_get("/video_feed", video_feed_handler)
+    app.router.add_get("/devices", devices_handler)
+    app.router.add_get("/device/power", device_state_handler)
+    app.router.add_post("/device/power", device_power_handler)
 
     # 启动 web 服务器
     runner = web.AppRunner(app)

@@ -1,7 +1,7 @@
 [project]
-name = "camera-server"
+name = "miloco-server"
 version = "0.1.0"
-description = "小米摄像头视频流：RK3576 VPU 硬解 + yolo11n 跑 NPU，MJPEG 推到浏览器"
+description = "米家设备服务：摄像头视频流（RK3576 VPU 硬解 + yolo11n 跑 NPU）推 MJPEG 到浏览器，另带设备列表 / 开关接口"
 requires-python = ">=3.12"
 dependencies = [
     # 拉小米摄像头的 HEVC 码流。不在 PyPI 上，见下面的 tool.uv.sources。

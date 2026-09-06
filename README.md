@@ -52,7 +52,7 @@ contest2026_290_dairoot/
 ├── tools/kws/                      ★ 离线唤醒词：训练→导出→对拍→评测→烧写全管线
 ├── linux-apps/                     ★ Linux 侧用户态服务（识别模型都跑 RK3576 NPU）
 │   ├── asr-server/                 语音识别 + 声纹（SenseVoice / ERes2NetV2）
-│   └── camera-server/              摄像头视频流 VPU 硬解 + yolo11n 检测
+│   └── miloco-server/              摄像头视频流 VPU 硬解 + yolo11n 检测 + 米家设备开关
 └── logs/                           AI Coding 日志
 ```
 
