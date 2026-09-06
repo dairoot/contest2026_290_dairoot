@@ -309,7 +309,7 @@ async def run():
     # 启动视频流
     stream_task = asyncio.create_task(
         client.miot_camera_stream.run_stream(
-            device_info["did"], 0, on_raw_video_callback=on_raw_video, video_quality=MIoTCameraVideoQuality.HIGH
+            device_info["did"], 0, on_raw_video_callback=on_raw_video, video_quality=MIoTCameraVideoQuality.LOW
         )
     )
 
