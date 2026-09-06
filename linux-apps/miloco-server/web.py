@@ -1,9 +1,8 @@
 import asyncio
-import io
 import os
 import sys
+import time
 from html import escape
-from queue import Queue
 from threading import Lock
 
 import cv2
@@ -19,10 +18,17 @@ from miloco_sdk.utils.types import MIoTCameraVideoQuality
 # 全局变量用于视频解码和显示
 video_decoder = None
 detect_and_draw = None  # yolo 模式下为检测函数：吃 BGR 帧，返回画好框的 BGR 帧
-# 用于存储视频帧的队列
-frame_queue = Queue(maxsize=2)
+# HTTP 客户端只读取最新 JPEG；解码后的丢帧由 GStreamer 的独立 queue 完成。
 frame_lock = Lock()
 latest_frame = None
+started_at = time.monotonic()
+received_packets = 0
+video_stats = {
+    "output_frames": 0,
+    "processing_ms": None,
+    "pipeline_latency_ms": None,
+    "published_at": None,
+}
 xiaomi_client = None  # 登录后的 SDK client，设备列表 / 开关接口用它
 camera_name = ""  # 正在拉流的摄像头名字，页头徽章用
 
@@ -33,6 +39,13 @@ Gst = None
 GstVideo = None
 gst_pipeline = None
 gst_appsrc = None  # 为 None 时表示没有硬解，回退到 PyAV 软解
+
+# queue 创建独立的下游线程。只丢已解码的旧帧，不能随意丢 H.265 参考帧。
+# 单独设 appsink drop=true 不够：new-sample 回调本身会阻塞它的 streaming thread。
+DECODED_QUEUE = (
+    "queue name=decoded max-size-buffers=1 max-size-bytes=0 "
+    "max-size-time=0 leaky=downstream"
+)
 
 # 页面模板放在同目录的 index.html 里，改 UI 不用动 Python。每次请求现读，
 # 板子上调样式存盘刷新就行，不用重启（顺带丢掉进程内的一份缓存，文件才 10K）
@@ -79,14 +92,26 @@ def nv12_from_buffer(buffer, info, width, height):
     return np.vstack((y, uv))
 
 
-def on_hw_sample(sink):
-    """GStreamer 线程回调：取出 VPU 产出的帧。"""
+def publish_frame(frame_data, processing_started, pipeline_latency_ms=None):
+    """一次发布 JPEG 和对应统计，客户端不会排队等历史帧。"""
     global latest_frame
 
+    now = time.monotonic()
+    with frame_lock:
+        latest_frame = frame_data
+        video_stats["output_frames"] += 1
+        video_stats["processing_ms"] = (now - processing_started) * 1000
+        video_stats["pipeline_latency_ms"] = pipeline_latency_ms
+        video_stats["published_at"] = now
+
+
+def on_hw_sample(sink):
+    """在 decoded queue 的下游线程推理，不阻塞 VPU 继续解码和丢弃旧帧。"""
     sample = sink.emit("pull-sample")
     if sample is None:
         return Gst.FlowReturn.OK
 
+    processing_started = time.monotonic()
     buffer = sample.get_buffer()
     ok, info = buffer.map(Gst.MapFlags.READ)
     if not ok:
@@ -106,8 +131,13 @@ def on_hw_sample(sink):
     finally:
         buffer.unmap(info)
 
-    with frame_lock:
-        latest_frame = frame_data
+    # appsrc 的 do-timestamp 为包到达服务器时的流水线时间；不含摄像头和网络耗时。
+    latency_ms = None
+    clock = gst_pipeline.get_clock() if gst_pipeline is not None else None
+    if clock is not None and buffer.pts != Gst.CLOCK_TIME_NONE:
+        running_time = clock.get_time() - gst_pipeline.get_base_time()
+        latency_ms = max(0, running_time - buffer.pts) / Gst.MSECOND
+    publish_frame(frame_data, processing_started, latency_ms)
     return Gst.FlowReturn.OK
 
 
@@ -138,8 +168,8 @@ def init_hw_decoder():
     gst_pipeline = Gst.parse_launch(
         "appsrc name=src is-live=true do-timestamp=true format=time "
         'caps="video/x-h265,stream-format=byte-stream,alignment=au,parsed=true" '
-        f"! mppvideodec width={HW_WIDTH} height={HW_HEIGHT} ! {tail} "
-        "! appsink name=sink sync=false max-buffers=2 drop=true"
+        f"! mppvideodec width={HW_WIDTH} height={HW_HEIGHT} ! {DECODED_QUEUE} ! {tail} "
+        "! appsink name=sink sync=false max-buffers=1 drop=true enable-last-sample=false"
     )
     sink = gst_pipeline.get_by_name("sink")
     sink.set_property("emit-signals", True)
@@ -151,7 +181,9 @@ def init_hw_decoder():
 
 
 async def on_raw_video(did: str, data: bytes, ts: int, seq: int, channel: int):
-    global video_decoder, latest_frame
+    global video_decoder, received_packets
+
+    received_packets += 1
 
     if gst_appsrc is not None:
         # 硬解：只把码流丢给 VPU，事件循环不做任何解码工作
@@ -168,6 +200,7 @@ async def on_raw_video(did: str, data: bytes, ts: int, seq: int, channel: int):
     frames = video_decoder.decode(pkt)
 
     for frame in frames:
+        processing_started = time.monotonic()
         # 转换为 BGR 格式 (OpenCV 使用 BGR)
         bgr_frame = frame.to_ndarray(format="bgr24")
 
@@ -177,9 +210,30 @@ async def on_raw_video(did: str, data: bytes, ts: int, seq: int, channel: int):
         # 将帧编码为 JPEG
         _, buffer = cv2.imencode(".jpg", bgr_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
-        # 更新最新帧
-        with frame_lock:
-            latest_frame = buffer.tobytes()
+        publish_frame(buffer.tobytes(), processing_started)
+
+
+async def video_stats_handler(request):
+    """性能快照，连续比较 output_frames / received_packets 可算区间帧率。"""
+    now = time.monotonic()
+    with frame_lock:
+        stats = dict(video_stats)
+    published_at = stats.pop("published_at")
+    stats.update(
+        uptime_s=round(now - started_at, 3),
+        received_packets=received_packets,
+        frame_age_ms=round((now - published_at) * 1000, 1) if published_at is not None else None,
+        decoder="vpu" if gst_appsrc is not None else "cpu",
+        yolo=detect_and_draw is not None,
+    )
+    if gst_appsrc is not None:
+        queue = gst_pipeline.get_by_name("decoded")
+        stats.update(
+            appsrc_queued_buffers=gst_appsrc.get_property("current-level-buffers"),
+            appsrc_queued_bytes=gst_appsrc.get_property("current-level-bytes"),
+            decoded_queued_frames=queue.get_property("current-level-buffers"),
+        )
+    return web.json_response(stats)
 
 
 async def index_handler(request):
@@ -202,6 +256,8 @@ async def video_feed_handler(request):
     """MJPEG 视频流处理"""
     response = web.StreamResponse()
     response.headers["Content-Type"] = "multipart/x-mixed-replace; boundary=frame"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Accel-Buffering"] = "no"
     await response.prepare(request)
 
     last_sent = None
@@ -366,6 +422,7 @@ async def run():
     app = web.Application()
     app.router.add_get("/", index_handler)
     app.router.add_get("/video_feed", video_feed_handler)
+    app.router.add_get("/video_stats", video_stats_handler)
     app.router.add_get("/devices", devices_handler)
     app.router.add_get("/device/power", device_state_handler)
     app.router.add_post("/device/power", device_power_handler)

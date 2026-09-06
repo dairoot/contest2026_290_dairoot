@@ -25,6 +25,7 @@ uv run web.py yolo       # 带 YOLO 检测
 | --- | --- |
 | `GET /` | 设备面板页面（模板是同目录的 `index.html`，每次请求现读，改样式不用重启） |
 | `GET /video_feed` | MJPEG 流 |
+| `GET /video_stats` | 帧数、处理耗时、服务器流水线延迟和队列深度 |
 | `GET /devices` | 在线设备列表（did / 名字 / 房间 / 型号） |
 | `GET /device/power?did=` | 读某台设备的开关状态，读不到返回 `power: null` |
 | `POST /device/power` | `{"did": "...", "action": "on" \| "off" \| "toggle"}` |
@@ -41,6 +42,29 @@ uv run web.py yolo       # 带 YOLO 检测
 
 不开 YOLO 时 JPEG 也由 VPU 编（`mppjpegenc`）；开了 YOLO 才需要取 NV12 裸帧到 CPU，
 转 BGR、检测、再软编 JPEG。
+
+硬解输出与检测之间有独立的 GStreamer `queue`，最多保留 **1 帧**，队满时丢弃
+最旧的已解码帧。YOLO 和 JPEG 编码跑在这个队列的下游线程；处理速度低于摄像头
+帧率时降低输出帧率，避免旧画面一直积压。不能只给 `appsink` 设置 `drop=true`：
+它的 `new-sample` 回调运行在 streaming thread，直接做推理会阻塞上游。也不能
+随意丢弃解码前的 H.265 包，否则会破坏参考帧依赖。
+
+用 `curl -s http://localhost:8180/video_stats` 检查：
+
+- `appsrc_queued_buffers` 应保持接近 0，`decoded_queued_frames` 不超过 1。
+- `processing_ms` 是最近一帧的转换、检测和 JPEG 编码耗时。
+- `pipeline_latency_ms` 从码流进入服务器算到 JPEG 发布，包含解码、排队和推理；
+  **不包含摄像头端、网络传输和浏览器渲染延迟**。CPU 软解时此字段为 `null`。
+- `frame_age_ms` 是最近 JPEG 发布至今的时间，可用来发现断流。
+- 两次请求的 `received_packets` / `output_frames` 增量除以时间差，可算输入包率
+  和输出帧率；包数不保证在所有摄像头上等于帧数。
+
+回归测试不需要登录摄像头或加载模型，用 40 fps 测试源和 100 ms 的慢检测验证
+丢帧与延迟上限（需系统 GStreamer 绑定）：
+
+```bash
+uv run python -m unittest -v test_video_pipeline
+```
 
 ## YOLO 模型（NPU）
 
