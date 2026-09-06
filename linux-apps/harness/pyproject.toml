@@ -4,15 +4,14 @@ version = "0.1.0"
 description = "板上语音对话 demo：麦克风拾音 → ASR → LLM → TTS 播放，带 web 配置台"
 requires-python = ">=3.10"
 dependencies = [
-    # 对话 SDK（LLM 流式、MCP 工具、TTS）。不在 PyPI 上，见下面的 tool.uv.sources；
-    # 在板子上它就是 ~/src/aichat_sdk，也可以改用 { path = "../aichat_sdk" }。
-    "dai-chat",
+    # 对话 SDK（LLM 流式、MCP 工具、TTS）。
+    "aichat-sdk",
     # web 配置台（改配置 / 看 llm.messages）。
     "starlette>=0.37",
     "uvicorn>=0.29",
     # 代理 asr-server 的录音文件下载（同源 /audio 路由）。
     "httpx>=0.27",
-    # camera_mcp.py：把摄像头画面交给视觉模型描述的 stdio MCP server。两个包 dai-chat 也依赖，
+    # camera_mcp.py：把摄像头画面交给视觉模型描述的 stdio MCP server。两个包 aichat-sdk 也依赖，
     # 这里因为直接 import 才显式写上。
     "fastmcp>=4",
     "openai>=1.40",
@@ -26,6 +25,3 @@ dependencies = [
 # 不需要把自身装进环境。
 [tool.uv]
 package = false
-
-[tool.uv.sources]
-dai-chat = { git = "ssh://git@gitee.com/fa0/aichat_sdk.git" }
