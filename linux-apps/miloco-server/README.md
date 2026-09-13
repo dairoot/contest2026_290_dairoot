@@ -68,22 +68,11 @@ uv run python -m unittest -v test_video_pipeline
 
 ## YOLO 模型（NPU）
 
-`rknn_yolo.py` 加载**本目录**下的 `yolo11n_int8.rknn`（`.gitignore` 排掉了模型产物，
-仓库里没有，得自己转一份放进来）。板子是 Cortex-A53/A72（ARMv8.0），PyPI 的 torch
-aarch64 wheel 按 ARMv8.2+ 编，一跑卷积就 SIGILL，所以板上没有 ultralytics
-这条退路，必须走 NPU。
-
-转换在板子上做（`tools/convert_rknn.py`，需要 rknn-toolkit2，另建一个 venv 装，
-别混进本项目的 `.venv`）：
-
-```bash
-# 1. 取 rknn_model_zoo 的 yolo11n.onnx（不是 ultralytics 直接导出的那个，
-#    输出被拆成 3 个尺度 x (box DFL / 类别 / score_sum) 共 9 路，后处理照它写的）
-# 2. 准备量化标定集：随便拍 20 张 640x640 的场景图，dataset.txt 一行一个绝对路径
-# 3. 转（在放着 yolo11n.onnx / dataset.txt 的目录里跑）
-python convert_rknn.py int8   # -> yolo11n_int8.rknn，不带 int8 参数则导出 fp 版
-cp yolo11n_int8.rknn <本目录>
-```
+从本目录启动服务时，`rknn_yolo.py` 加载 `yolo11n_int8.rknn`。
+该模型产物没有提交到仓库，启用检测前需准备好模型和兼容的 RKNN 运行时。
+模型来源、转换环境、校准集与转换步骤统一见
+[YOLO 迁移到 RKNN NPU Skill](../../skills/yolo-rknn-migration/SKILL.md) 及其
+[项目执行参考](../../skills/yolo-rknn-migration/references/project-workflow.md)。
 
 自测（会打印检测结果、平均耗时，并把画好框的图写到 `rknn_out.jpg`）：
 

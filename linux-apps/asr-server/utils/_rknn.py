@@ -22,7 +22,7 @@ def rknn_available(model_path: str, what: str) -> bool:
 
     if not os.path.isfile(model_path):
         logger.warning(
-            "[%s] 找不到 %s，回退到 CPU 后端；模型生成见 README「生成 NPU 模型」",
+            "[%s] 找不到 %s，回退到 CPU 后端；模型生成见仓库 skills/speech-rknn-migration/SKILL.md",
             what,
             model_path,
         )

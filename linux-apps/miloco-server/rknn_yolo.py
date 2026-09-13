@@ -5,7 +5,7 @@
 
     rknn_model_zoo 的 yolo11n.onnx --(rknn-toolkit2)--> yolo11n_int8.rknn --(rknnlite)--> NPU
 
-转换步骤见 README 的「YOLO 模型（NPU）」一节。
+转换步骤见仓库 skills/yolo-rknn-migration/SKILL.md 及其 references/project-workflow.md。
 
 模型的 9 个输出是 3 个尺度 x (box 64通道 DFL, 类别 80通道, score_sum)，后处理照
 rknn_model_zoo 的实现，只是把里面的 torch 换成了 numpy。

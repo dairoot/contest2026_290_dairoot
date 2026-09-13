@@ -155,7 +155,69 @@
       "source_snapshot_sha256": "111fee0ef22a011fa857d016ae3c793dd5ea56fbcc1ed9f9db68bb59c97f3ffa",
       "snapshot_through_ordinal": 189,
       "export_scope": "User/assistant dialogue, tool calls/results and token usage through the user submission request; excludes automatic environment setup and internal runtime records."
+    },
+    {
+      "session_id": "01a09a27-ad8a-7f62-8daa-8bfb4bd7d1dd",
+      "tool": "codex",
+      "started_at": "2026-09-13T09:44:51.102Z",
+      "last_event_at": "2026-09-13T11:08:12.117Z",
+      "event_count": 167,
+      "raw_event_count": 397,
+      "file_path": "logs/dairoot/2026-09-13/codex__01a09a27-ad8a-7f62-8daa-8bfb4bd7d1dd.jsonl",
+      "collection_mode": "cli",
+      "source_interface": "codex-desktop",
+      "health": "ok",
+      "model": "gpt-6-astra",
+      "tokens_total": 3540217,
+      "redacted_count_total": 1,
+      "format_adapter": "codex-response-item-to-contest-v1",
+      "source_snapshots": [
+        {
+          "source_file": "rollout-2026-09-13T17-44-46-01a09a27-ad8a-7f62-8daa-8bfb4bd7d1dd.jsonl",
+          "source_snapshot_sha256": "6f364db2389371796ab7eaad4dd8217f0d647ffc29663d3917f8f5a14d6d23be",
+          "raw_event_count": 62,
+          "snapshot_through_ordinal": 61
+        },
+        {
+          "source_file": "rollout-2026-09-13T17-47-20-01a09a27-ad8a-7f62-8daa-8bfb4bd7d1dd_01a09a2a-050e-7102-a7ec-d01b0da04f4a.jsonl",
+          "source_snapshot_sha256": "6456ca2f49bfc9cff578c36fdf55148dd5cb5893f187a18392592528a46fff48",
+          "raw_event_count": 335,
+          "snapshot_through_ordinal": 334
+        }
+      ],
+      "export_scope": "Real user/assistant dialogue, tool calls/results and recorded token usage across this session, through the first user log-export request. Excludes internal reasoning, injected configuration, runtime events and image bytes; preserves attachment references. Written and redacted with official snapshot_core@1.3.0."
+    },
+    {
+      "session_id": "01a09a56-001e-7592-948b-4caa6093c284",
+      "tool": "codex",
+      "started_at": "2026-09-13T10:36:23.323Z",
+      "last_event_at": "2026-09-13T11:08:06.804Z",
+      "event_count": 127,
+      "raw_event_count": 324,
+      "file_path": "logs/dairoot/2026-09-13/codex__01a09a56-001e-7592-948b-4caa6093c284.jsonl",
+      "collection_mode": "cli",
+      "source_interface": "codex-desktop",
+      "health": "ok",
+      "model": "gpt-6-astra",
+      "tokens_total": 5015929,
+      "redacted_count_total": 1,
+      "format_adapter": "codex-response-item-to-contest-v1",
+      "source_snapshots": [
+        {
+          "source_file": "rollout-2026-09-13T18-35-22-01a09a56-001e-7592-948b-4caa6093c284.jsonl",
+          "source_snapshot_sha256": "fb9f186f757531bb351573b6e6513632a23d768ffcfcab64ab9f25e22747a557",
+          "raw_event_count": 317,
+          "snapshot_through_ordinal": 316
+        },
+        {
+          "source_file": "rollout-2026-09-13T19-08-02-01a09a56-001e-7592-948b-4caa6093c284_01a09a73-e84e-78c2-836f-dc40d78d1888.jsonl",
+          "source_snapshot_sha256": "2c132ccf14dbebe3c96449fe6a7f0c14568375d21cc118cc1f0321df658fb991",
+          "raw_event_count": 7,
+          "snapshot_through_ordinal": 324
+        }
+      ],
+      "export_scope": "Real user/assistant dialogue, tool calls/results and recorded token usage for the seven completed development turns, plus the current user log-export request. Excludes the superseded aborted turn, automatic environment setup, internal reasoning and runtime records. Written and redacted with official snapshot_core@1.3.0."
     }
   ],
-  "updated_at": "2026-09-06T12:01:23.578Z"
+  "updated_at": "2026-09-13T11:15:58.029914+00:00"
 }

@@ -2,7 +2,8 @@
 
 只能在 Linux 上跑，rknn-toolkit2 没有 macOS 的包。**两个模型都在 Ubuntu x86_64 上
 转**（ASR 要 8 GB 以上内存，板子会被 OOM killer 杀掉）；声纹只要 2 GB，也可以直接在
-板子上原地转（aarch64 同样有包），详见 README「在哪台机器上转」。
+板子上原地转（aarch64 同样有包），详见仓库
+skills/speech-rknn-migration/references/asr-project-workflow.md。
 
     pip install rknn-toolkit2==2.3.2
     python tools/convert_rknn.py --model-dir rknn_models
