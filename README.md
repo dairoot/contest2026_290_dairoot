@@ -53,6 +53,7 @@ contest2026_290_dairoot/
 ├── linux-apps/                     ★ Linux 侧用户态服务（识别模型都跑 RK3576 NPU）
 │   ├── asr-server/                 语音识别 + 声纹（SenseVoice / ERes2NetV2）
 │   └── miloco-server/              摄像头视频流 VPU 硬解 + yolo11n 检测 + 米家设备开关
+├── skills/                         从本项目沉淀的三份可复用开发 Skill
 └── logs/                           AI Coding 日志
 ```
 
@@ -114,6 +115,18 @@ manifest `<linkfile>` 注入，以 patch 系列放在 [`nuttx-side/`](nuttx-side
 AI 负责阅读 openvela/NuttX 源码、编写与迭代所有 C 代码、通过 ssh+devmem 远程读板载
 内存做无串口诊断、逐轮定位并修复 7 个关键 bug 直至上板双向通信成功。完整对话与工具
 调用记录见 [`logs/`](logs/)。
+
+### 沉淀的开发 Skills
+
+以下 Skill 将项目中的实现、失败经验和验收方法整理为 AI 可执行的开发流程，
+每份入口均为 `SKILL.md`，详细命令与实现边界放在同目录的 `references/`。
+执行项目脚本需要本仓源码；安装到其他位置后，应先定位实际项目根目录。
+
+| Skill | 内容与验证边界 |
+|---|---|
+| [嵌入式离线唤醒词开发与部署到 openvela](skills/openvela-kws-deployment/SKILL.md) | 真人/重录语料、DS-CNN 训练、Python/C 数值对拍、流式评测、固件部署与真机验收 |
+| [语音模型 ASR、VAD 迁移到 RKNN NPU](skills/speech-rknn-migration/SKILL.md) | 已实现的 SenseVoiceSmall ASR 迁移；FSMN-VAD 的有状态迁移与验收方法。当前项目 VAD 在 RK3576 上仍由 CPU 执行，尚无 VAD RKNN 后端 |
+| [YOLO 迁移到 RKNN NPU](skills/yolo-rknn-migration/SKILL.md) | YOLO11n 输出契约、fp16/int8 转换、预处理/DFL/NMS、板上检测与视频接入 |
 
 > 提交前请把 `logs/your-github-login/` 替换为你的真实 GitHub 登录名目录，并按
 > 《AI Coding 日志归集与提交手册》导出本次 Claude Code 会话的 `.jsonl` 到该目录。
