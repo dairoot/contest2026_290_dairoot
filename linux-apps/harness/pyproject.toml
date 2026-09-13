@@ -19,6 +19,8 @@ dependencies = [
     "sounddevice>=0.5",
     "numpy>=1.24",
     "python-dotenv>=1.0.0",
+    # 上传技能的 SKILL.md frontmatter 校验。
+    "pyyaml>=6",
 ]
 
 # main.py / server.py 平铺在本目录，以本目录为工作目录直接 uv run main.py，

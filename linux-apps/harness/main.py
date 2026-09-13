@@ -33,6 +33,7 @@ sys.path.insert(0, BASE_DIR)  # server.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(BASE_DIR)))  # aichat_sdk
 
 from server import serve
+from skill_install import MAX_OUTPUT_CHARS, install_skill, run_skill_command
 
 from aichat_sdk import ChatBot, DEFAULT_TTS_ENGINE, get_tts_engines
 from aichat_sdk.config import DEFAULT_AGENT_SOUL
@@ -310,6 +311,8 @@ class AIClient:
         self._output_stream: sd.OutputStream | None = None
         self._input_stream: sd.InputStream | None = None
         self._lock = asyncio.Lock()
+        self._skill_install_lock = asyncio.Lock()
+        self.skill_install_state = {"running": False, "output": "", "error": ""}
 
     # ---------------- web 层用到的接口 ----------------
 
@@ -327,6 +330,7 @@ class AIClient:
             "round": self.chat_bot.llm.round if self.chat_bot else 0,
             "error": self.last_error,
             "compression": self.compression_status(),
+            "skill_install": dict(self.skill_install_state),
         }
 
     def status(self) -> dict:
@@ -432,6 +436,37 @@ class AIClient:
         config = validate_config(raw)
         save_config(config)
         await self.restart(config)
+
+    async def install_skill_upload(self, filename: str, data: bytes) -> dict:
+        if self._skill_install_lock.locked():
+            raise ValueError("已有技能正在安装，请稍后再试")
+        async with self._skill_install_lock:
+            skill = install_skill(filename, data, SKILLS_DIR, {item["name"] for item in load_skills()})
+            self.skills = load_skills()
+        return skill
+
+    async def install_skill_command(self, command: str) -> dict:
+        if self._skill_install_lock.locked():
+            raise ValueError("已有技能正在安装，请稍后再试")
+        async with self._skill_install_lock:
+            before = {item["name"] for item in load_skills()}
+            self.skill_install_state = {"running": True, "output": "", "error": ""}
+
+            def append_output(text):
+                self.skill_install_state["output"] = (self.skill_install_state["output"] + text)[-MAX_OUTPUT_CHARS:]
+
+            try:
+                code = await run_skill_command(command, BASE_DIR, append_output)
+                if code != 0:
+                    raise ValueError(f"安装命令失败（退出码 {code}），请查看安装输出")
+                self.skills = load_skills()
+                return {"installed": [item["name"] for item in self.skills if item["name"] not in before],
+                        "output": self.skill_install_state["output"]}
+            except ValueError as e:
+                self.skill_install_state["error"] = str(e)
+                raise
+            finally:
+                self.skill_install_state["running"] = False
 
     async def install_mcp_package(self, name: str) -> str:
         """给缺 Python 包连不上的 MCP server 装包，装完重启 ChatBot 重连，返回装的包名。

@@ -1,4 +1,4 @@
-"""web 配置台的 HTTP 层：一个页面 + 七个接口 + 一个录音代理，只跟 AIClient 打交道。
+"""web 配置台的 HTTP 层：一个页面、配置与安装接口、一个录音代理。
 
 - GET  /             页面
 - GET  /api/config   当前配置 + SDK 的 TTS 引擎目录 + 麦克风列表（页面加载时填表单，之后不再轮询，免得覆盖正在编辑的内容）
@@ -6,6 +6,8 @@
 - POST /api/restart  用当前配置重开一轮会话
 - POST /api/send     发一句文本给 ChatBot（等同说话，照样会出声）
 - POST /api/mcp/install  给缺 Python 包连不上的 MCP server 装包，装完自动重启重连
+- POST /api/skills/install?filename=...  上传 ZIP 技能包或 SKILL.md，保存并重启后生效
+- POST /api/skills/command  执行技能安装命令，输出通过 SSE 推送
 - GET  /api/state    完整状态 + llm.messages（页面加载、保存配置、重启后各取一次）
 - GET  /api/events   SSE：把会变的那部分状态和 llm.messages 推给页面，代替轮询
 - GET  /audio/...    转发到 ASR 服务上的用户录音（见 get_audio）
@@ -25,6 +27,7 @@ from starlette.responses import FileResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 
 from aichat_sdk.config import ASR_SERVER_WS_URL
+from skill_install import MAX_UPLOAD_BYTES
 
 INDEX_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
 EVENT_INTERVAL = 0.5  # 秒；SSE 每隔这么久看一眼状态变没变
@@ -67,6 +70,32 @@ def create_app(client) -> Starlette:
         except ValueError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         return JSONResponse({"ok": True, "package": package})
+
+    async def post_skill_install(request: Request):
+        data = bytearray()
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > MAX_UPLOAD_BYTES:
+                return JSONResponse({"ok": False, "error": "技能文件不能超过 10 MB"}, status_code=413)
+            data.extend(chunk)
+        try:
+            skill = await client.install_skill_upload(request.query_params.get("filename", ""), bytes(data))
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        status = client.status()
+        return JSONResponse({"ok": True, "skill": skill, "skills": status["skills"],
+                             "skills_dir": status["skills_dir"]})
+
+    async def post_skill_command(request: Request):
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("请求需要包含 command 的 JSON 对象")
+            result = await client.install_skill_command(body.get("command", ""))
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e),
+                                 "output": client.skill_install_state["output"]}, status_code=400)
+        status = client.status()
+        return JSONResponse({"ok": True, **result, "skills": status["skills"], "skills_dir": status["skills_dir"]})
 
     async def get_state(request: Request):
         return JSONResponse({"status": client.status(), "messages": client.messages()})
@@ -122,6 +151,8 @@ def create_app(client) -> Starlette:
             Route("/api/restart", post_restart, methods=["POST"]),
             Route("/api/send", post_send, methods=["POST"]),
             Route("/api/mcp/install", post_mcp_install, methods=["POST"]),
+            Route("/api/skills/install", post_skill_install, methods=["POST"]),
+            Route("/api/skills/command", post_skill_command, methods=["POST"]),
             Route("/api/state", get_state),
             Route("/api/events", get_events),
             Route("/audio/{path:path}", get_audio),

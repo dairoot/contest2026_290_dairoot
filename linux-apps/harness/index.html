@@ -117,6 +117,34 @@ input.mcp-name:focus { background:var(--bg); border-color:var(--line); }
 .mcp-tool-desc:empty { display:none; }
 #skill-rows .mcp-row.first { border-top:0; }
 .skill-desc { font-size:12px; color:var(--muted); line-height:1.6; }
+.skill-installer { margin-bottom:12px; padding:12px; border:1px solid var(--line); border-radius:10px; }
+.skill-install-tabs { display:flex; gap:4px; padding:3px; margin-bottom:12px; background:var(--bg); border-radius:8px; }
+.skill-install-tabs button { flex:1; padding:6px 8px; border:0; border-radius:6px; background:transparent; color:var(--muted); font-size:12px; }
+.skill-install-tabs button[aria-selected="true"] { background:var(--card); color:var(--fg); font-weight:600; box-shadow:0 1px 3px #00000010; }
+.skill-dropzone { display:flex; flex-direction:column; align-items:center; gap:7px; width:100%; min-height:124px; padding:16px 12px; border:1px dashed var(--line); background:var(--bg); border-radius:8px; }
+.skill-dropzone:hover:not(:disabled), .skill-dropzone.drag-over { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 5%, var(--card)); }
+.skill-dropzone.has-file { border-style:solid; }
+.skill-file-icon { display:flex; color:var(--accent); }
+#skill-file-name { max-width:100%; font-size:12px; font-weight:500; overflow-wrap:anywhere; }
+#skill-file-meta { font-size:11px; color:var(--muted); }
+.skill-install-submit { width:100%; margin-top:10px; font-size:12px; font-weight:500; }
+.skill-install-submit[data-install-state="running"] { opacity:1; cursor:wait; }
+.skill-install-submit[data-install-state="running"]::before { content:""; display:inline-block; width:10px; height:10px; margin-right:7px; vertical-align:-1px; border:1.5px solid currentColor; border-right-color:transparent; border-radius:50%; animation:skill-install-spin .8s linear infinite; }
+.skill-install-submit[data-install-state="success"] { opacity:1; background:var(--ok); border-color:var(--ok); }
+.skill-install-submit[data-install-state="completed"] { opacity:1; background:var(--bg); border-color:var(--line); color:var(--muted); }
+@keyframes skill-install-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .skill-install-submit[data-install-state="running"]::before { animation:none; } }
+.skill-install-footer { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px; margin-top:10px; color:var(--muted); font-size:11px; }
+.skill-install-footer button.link { color:var(--muted); font-size:11px; }
+.skill-install-help { margin-top:8px; padding:8px 10px; border-radius:6px; background:var(--bg); color:var(--muted); font-size:11px; line-height:1.7; }
+.skill-command-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.skill-command-head label { margin:0; color:var(--muted); font-size:12px; }
+.skill-command-head button.link { font-size:11px; }
+#skill-command { display:block; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; line-height:1.7; min-height:88px; resize:vertical; }
+#skill-command::placeholder { color:var(--muted); opacity:.75; }
+#skill-install-note { display:block; overflow-wrap:anywhere; margin-top:10px; padding:8px 10px; border:1px solid var(--line); border-radius:6px; font-size:12px; }
+#skill-install-note:empty { display:none; }
+#skill-install-output { max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:11px; line-height:1.6; background:var(--bg); margin:8px 0 0; padding:8px 10px; border-radius:6px; }
 .skill-path {
   font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px;
   color:var(--muted); word-break:break-all; margin-top:6px;
@@ -258,8 +286,39 @@ details.thinking pre { color:var(--muted); }
         <div class="group-head">
           <span class="group-arrow">▶</span>
           <h2 id="skill-title">Skills<span id="skill-count" class="count"></span></h2>
+          <button type="button" id="skill-add" class="link" aria-expanded="false" aria-controls="skill-installer">+ 安装</button>
         </div>
         <div class="group-body">
+          <div id="skill-installer" class="skill-installer" hidden>
+            <div class="skill-install-tabs" role="tablist" aria-label="安装方式">
+              <button type="button" id="skill-upload-tab" role="tab" aria-selected="true" aria-controls="skill-upload-panel">上传技能包</button>
+              <button type="button" id="skill-command-tab" role="tab" aria-selected="false" aria-controls="skill-command-panel" tabindex="-1">命令安装</button>
+            </div>
+            <div id="skill-upload-panel" role="tabpanel" aria-labelledby="skill-upload-tab">
+              <input type="file" id="skill-file" accept=".zip,.md" hidden aria-label="选择技能文件">
+              <button type="button" id="skill-choose" class="skill-dropzone" aria-describedby="skill-file-meta">
+                <span class="skill-file-icon" aria-hidden="true"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m-4 4 4-4 4 4M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg></span>
+                <span id="skill-file-name">点击选择文件，或拖拽到此处</span>
+                <span id="skill-file-meta">ZIP / SKILL.md · 最大 10 MB</span>
+              </button>
+              <button type="button" id="skill-upload" class="primary skill-install-submit" disabled>安装技能</button>
+            </div>
+            <div id="skill-command-panel" role="tabpanel" aria-labelledby="skill-command-tab" hidden>
+              <div class="skill-command-head">
+                <label for="skill-command">安装命令</label>
+                <button type="button" id="skill-lark" class="link">填入飞书示例</button>
+              </div>
+              <textarea id="skill-command" rows="3" placeholder="npx @larksuite/cli@latest install" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+              <button type="button" id="skill-run" class="primary skill-install-submit" disabled>执行安装</button>
+            </div>
+            <div class="skill-install-footer">
+              <span>安装后，保存并重启生效</span>
+              <button type="button" id="skill-help-toggle" class="link" aria-expanded="false" aria-controls="skill-install-help">安装说明</button>
+            </div>
+            <div id="skill-install-help" class="skill-install-help" hidden>ZIP 内需包含一个 SKILL.md 及所需资源，同名技能不会覆盖。命令在 harness 所在设备执行，需已安装对应工具；需要交互的命令请在终端运行。</div>
+            <span id="skill-install-note" class="note" role="status" aria-live="polite"></span>
+            <pre id="skill-install-output" hidden></pre>
+          </div>
           <input id="skill-search" class="search" placeholder="过滤技能…" spellcheck="false" hidden>
           <div class="mcp-list" id="skill-list">
             <div id="skill-rows"></div>
@@ -598,6 +657,149 @@ function renderToolList(row, tools) {
 // ---------------- skills ----------------
 // SKILLS_DIR 下扫出来的技能清单；每个技能一个启用勾选框，保存时收集成 skills 配置项提交，停用的不烘进系统提示词
 let skillToggles = {};  // 开关的兜底值（{技能名: 是否启用}）：行是取状态时建出来的，保存时可能还没建
+let skillInstalling = false;
+let skillCommandRunning = false;
+let skillInstallSig = null;
+let skillInstallMode = "upload";
+const skillInstallResults = {upload: "idle", command: "idle"};
+
+function resetSkillInstallResult(mode) {
+  skillInstallResults[mode] = "idle";
+  skillInstallNote("", true);
+  $("#skill-install-output").hidden = true;
+  $("#skill-install-output").textContent = "";
+}
+
+function setSkillInstallMode(mode) {
+  skillInstallMode = mode;
+  for (const name of ["upload", "command"]) {
+    const tab = $(name === "upload" ? "#skill-upload-tab" : "#skill-command-tab");
+    const selected = name === mode;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    $("#skill-" + name + "-panel").hidden = !selected;
+  }
+}
+
+function updateSkillFile() {
+  const file = $("#skill-file").files[0];
+  $("#skill-choose").classList.toggle("has-file", !!file);
+  $("#skill-file-name").textContent = file ? file.name : "点击选择文件，或拖拽到此处";
+  $("#skill-file-meta").textContent = file
+    ? (file.size < 1024 * 1024 ? Math.max(1, Math.ceil(file.size / 1024)) + " KB" : (file.size / 1024 / 1024).toFixed(1) + " MB") + " · 点击更换文件"
+    : "ZIP / SKILL.md · 最大 10 MB";
+  skillInstallButtons();
+}
+
+function skillFileError(file) {
+  if (!file) return "请先选择 ZIP 技能包或 SKILL.md";
+  if (file.name !== "SKILL.md" && !file.name.toLowerCase().endsWith(".zip")) return "请选择 ZIP 技能包或 SKILL.md";
+  if (!file.size || file.size > 10 * 1024 * 1024) return "文件不能为空且不能超过 10 MB";
+  return "";
+}
+
+function skillInstallNote(text, ok) {
+  $("#skill-install-note").textContent = text;
+  $("#skill-install-note").className = "note " + (ok ? "ok" : "err");
+}
+
+function skillInstallButtons() {
+  const installing = skillInstalling || skillCommandRunning;
+  $("#skill-installer").setAttribute("aria-busy", String(installing));
+  for (const id of ["skill-choose", "skill-file", "skill-command", "skill-lark", "skill-upload-tab", "skill-command-tab"]) $("#" + id).disabled = installing;
+  for (const mode of ["upload", "command"]) {
+    const button = $(mode === "upload" ? "#skill-upload" : "#skill-run");
+    const state = installing && skillInstallMode === mode ? "running" : skillInstallResults[mode];
+    const empty = mode === "upload" ? !!skillFileError($("#skill-file").files[0]) : !$("#skill-command").value.trim();
+    button.dataset.installState = state;
+    button.disabled = installing || empty || state === "success" || state === "completed";
+    button.textContent = {running: "安装中…", success: "✓ 已安装", completed: "执行完成", error: "安装失败，重试"}[state]
+      || (mode === "upload" ? "安装技能" : "执行安装");
+  }
+}
+
+function renderSkillInstall(state) {
+  if (!state) return;
+  const sig = JSON.stringify(state);
+  if (sig === skillInstallSig) return;
+  skillInstallSig = sig;
+  const wasRunning = skillCommandRunning;
+  skillCommandRunning = state.running;
+  if (state.running) setSkillInstallMode("command");
+  // 另一个页面发起的安装也保留结束状态；当前页面的结果由 POST 响应确定。
+  if (!skillInstalling && wasRunning && !state.running) skillInstallResults.command = state.error ? "error" : "completed";
+  skillInstallButtons();
+  const output = $("#skill-install-output");
+  if (state.output) {
+    output.hidden = false;
+    output.textContent = state.output;
+    output.scrollTop = output.scrollHeight;
+  }
+  if (state.running && !state.output) {
+    output.hidden = true;
+    output.textContent = "";
+  }
+  if (state.running) skillInstallNote("命令安装中…", true);
+  else if (state.error) skillInstallNote(state.error, false);
+}
+
+async function installSkill(mode) {
+  if (skillInstalling || skillCommandRunning) return;
+  let url, options;
+  if (mode === "upload") {
+    const file = $("#skill-file").files[0];
+    const error = skillFileError(file);
+    if (error) return skillInstallNote(error, false);
+    url = "/api/skills/install?filename=" + encodeURIComponent(file.name);
+    options = {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: file};
+  } else {
+    const command = $("#skill-command").value.trim();
+    if (!command) return skillInstallNote("请输入安装命令", false);
+    url = "/api/skills/command";
+    options = {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({command})};
+  }
+  skillInstalling = true;
+  setSkillInstallMode(mode);
+  skillInstallResults[mode] = "idle";
+  skillInstallButtons();
+  $("#skill-install-output").hidden = true;
+  $("#skill-install-output").textContent = "";
+  skillInstallNote(mode === "upload" ? "上传安装中…" : "命令安装中…", true);
+  try {
+    const res = await fetch(url, options);
+    const data = await res.json();
+    if (data.output) {
+      $("#skill-install-output").textContent = data.output;
+      $("#skill-install-output").hidden = false;
+    }
+    if (!res.ok || !data.ok) throw new Error(data.error || "安装失败");
+    // 安装只刷新技能清单，保留用户尚未保存的表单和技能开关。
+    const toggles = collectSkills();
+    renderSkills(data.skills || [], data.skills_dir);
+    for (const box of document.querySelectorAll("#skill-rows .mcp-enabled")) {
+      if (Object.hasOwn(toggles, box.dataset.skill)) {
+        box.checked = toggles[box.dataset.skill];
+        box.dispatchEvent(new Event("change"));
+      }
+    }
+    $("#skill-search").value = "";
+    filterSkills();
+    if (mode === "upload") {
+      $("#skill-file").value = "";
+      updateSkillFile();
+    }
+    const names = data.skill ? [data.skill.name] : data.installed;
+    skillInstallResults[mode] = names?.length ? "success" : "completed";
+    skillInstallNote(names?.length ? "已安装 " + names.join("、") + "，保存并重启后生效" : "命令执行完成，未发现新增技能。请查看输出，并确认安装到了 " + data.skills_dir, true);
+  } catch (e) {
+    skillInstallResults[mode] = "error";
+    skillInstallNote(e.message || String(e), false);
+  } finally {
+    skillInstalling = false;
+    skillCommandRunning = false;
+    skillInstallButtons();
+  }
+}
 
 function collectSkills() {
   const boxes = document.querySelectorAll("#skill-rows .mcp-enabled");
@@ -760,6 +962,7 @@ async function post(url, body, okText) {
 // ---------------- 状态 + 消息 ----------------
 
 function renderStatus(s) {
+  renderSkillInstall(s.skill_install);
   const badges = [];
   if (s.restarting) badges.push(["重启中", "warn"]);
   else if (!s.running) badges.push(["未启动", "err"]);
@@ -953,6 +1156,62 @@ for (const head of document.querySelectorAll(".group-head")) {
 }
 
 $("#skill-search").addEventListener("input", filterSkills);
+$("#skill-add").addEventListener("click", () => {
+  const panel = $("#skill-installer");
+  panel.hidden = !panel.hidden;
+  $("#skill-add").textContent = panel.hidden ? "+ 安装" : "− 收起";
+  $("#skill-add").setAttribute("aria-expanded", String(!panel.hidden));
+  panel.closest(".group").classList.add("open");
+});
+$("#skill-upload").addEventListener("click", () => installSkill("upload"));
+$("#skill-run").addEventListener("click", () => installSkill("command"));
+for (const mode of ["upload", "command"]) {
+  const tab = $("#skill-" + mode + "-tab");
+  tab.addEventListener("click", () => setSkillInstallMode(mode));
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? "upload" : event.key === "End" ? "command" : mode === "upload" ? "command" : "upload";
+    setSkillInstallMode(next);
+    $("#skill-" + next + "-tab").focus();
+  });
+}
+$("#skill-help-toggle").addEventListener("click", () => {
+  const help = $("#skill-install-help");
+  help.hidden = !help.hidden;
+  $("#skill-help-toggle").setAttribute("aria-expanded", String(!help.hidden));
+});
+$("#skill-command").addEventListener("input", () => {
+  resetSkillInstallResult("command");
+  skillInstallButtons();
+});
+$("#skill-choose").addEventListener("click", () => $("#skill-file").click());
+$("#skill-file").addEventListener("change", () => {
+  resetSkillInstallResult("upload");
+  const error = skillFileError($("#skill-file").files[0]);
+  skillInstallNote(error, false);
+  updateSkillFile();
+});
+for (const name of ["dragenter", "dragover", "dragleave", "drop"]) {
+  $("#skill-choose").addEventListener(name, (event) => {
+    event.preventDefault();
+    if (skillInstalling || skillCommandRunning) return;
+    $("#skill-choose").classList.toggle("drag-over", name === "dragenter" || name === "dragover");
+    if (name !== "drop") return;
+    const files = event.dataTransfer.files;
+    if (files.length !== 1) return skillInstallNote("请每次上传一个技能包", false);
+    const error = skillFileError(files[0]);
+    if (error) return skillInstallNote(error, false);
+    $("#skill-file").files = files;
+    $("#skill-file").dispatchEvent(new Event("change"));
+  });
+}
+$("#skill-lark").addEventListener("click", () => {
+  if ($("#skill-command").value.trim() !== "npx @larksuite/cli@latest install") resetSkillInstallResult("command");
+  $("#skill-command").value = "npx @larksuite/cli@latest install";
+  skillInstallButtons();
+  $("#skill-command").focus();
+});
 
 $("#mcp-add").addEventListener("click", () => {
   addMcpRow("", {}, true).querySelector(".mcp-name").focus();
