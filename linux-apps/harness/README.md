@@ -50,6 +50,10 @@ uv run python -m unittest -v test_skill_install
 `mcp/volume_mcp.py` 使用 `pactl` 控制当前用户的 PulseAudio 默认输出设备。
 需要系统安装 `pulseaudio-utils`，并以运行桌面音频服务的用户启动 harness。
 
+`main.py` 启动时先把默认输出设备设到 `DEFAULT_SPEAKER_VOLUME`（80%），
+所以每次重启都会覆盖上一轮对话调过的音量；`pactl` 缺失或音频服务没起来时
+只记一条 warning，不影响对话启动。
+
 “音量”服务默认启用，已有 `config.json` 缺少该项时也会自动补上。
 如果在配置台明确设置 `enabled: false`，启动时会保留禁用状态。对应配置为：
 

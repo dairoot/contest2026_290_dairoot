@@ -59,6 +59,7 @@ SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")  # 每轮会话结束后把完
 WEB_HOST = "0.0.0.0"  # 注意：页面能改外部 MCP server 的启动命令（等于能在本机拉进程），绑 0.0.0.0 后同网段都能访问
 WEB_PORT = 8080
 OUTPUT_SAMPLE_RATE = 24000  # 采样率不放到页面上配，扬声器流建一次就一直用
+DEFAULT_SPEAKER_VOLUME = 80  # 启动时把扬声器拉到这个音量；之后由「音量」MCP 按对话调整
 PIP_INSTALL_TIMEOUT = 300  # 秒；pip 卡在网络上别让「安装中」永远转下去
 
 DEFAULT_CONFIG = {
@@ -85,6 +86,28 @@ DEFAULT_CONFIG = {
         }
     },
 }
+
+
+async def set_default_volume() -> None:
+    """把扬声器拉到 DEFAULT_SPEAKER_VOLUME。失败只记一条日志：板上没装 pulseaudio-utils
+    或音频服务没起来时，不该连带着让整个对话进程起不来。"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{DEFAULT_SPEAKER_VOLUME}%",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as exc:
+        logger.warning("设置默认音量失败：%s", exc)
+        return
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=3)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        logger.warning("设置默认音量超时，请检查当前用户的 PulseAudio 服务")
+        return
+    if proc.returncode:
+        logger.warning("设置默认音量失败：%s", stderr.decode(errors="replace").strip() or proc.returncode)
 
 
 def input_devices() -> list[str]:
@@ -696,6 +719,7 @@ class AIClient:
     # ---------------- 入口 ----------------
 
     async def run(self):
+        await set_default_volume()
         self._output_stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype=np.int16)
         self._output_stream.start()
         try:
