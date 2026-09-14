@@ -37,7 +37,9 @@ board/contest_board/
 └── linux-side/                 ★ Linux 侧配套文件（KickPi Linux SDK 上叠加）
     ├── dts/rk3576-kickpi-k7-amp.dtsi          AMP 资源划分设备树
     ├── dts/rk3576-kickpi-k7-linux-amp.dts     K7 板 AMP 变体
-    └── configs/{amp-k7.its, parameter-amp.txt, amp-rpmsg.config, *_amp_defconfig}
+    ├── configs/{amp-k7.its, parameter-amp.txt, amp-rpmsg.config, *_amp_defconfig}
+    └── rootfs/                                 按目标路径镜像的 rootfs 文件
+        └── etc/NetworkManager/conf.d/wifi-powersave-off.conf
 ```
 
 RK3576 芯片层（arch/arm64/src/rk3576、include/rk3576）与 GICv2 AMP-slave 补丁
@@ -108,7 +110,7 @@ RK3576 Linux SDK，按其原授权分发；本作品对这部分不主张任何�
 SDK 由 KickPi/板厂渠道获取（Rockchip 私有授权，不可转发，故本仓只提供叠加文件）。
 本作品的开发基线是该 SDK 的 `24a411114`（"feat(dts):update K7 wifi dts name"）。
 Linux 内核与 U-Boot 的 C 代码**一行未改**——下面这几个 dts / config / 分区表文件
-就是 Linux 侧的全部改动。
+加一个 rootfs 配置，就是 Linux 侧的全部改动。
 
 把 `linux-side/` 下的文件放进 KickPi RK3576 Linux SDK：
 
@@ -125,6 +127,17 @@ echo 'dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-kickpi-k7-linux-amp.dtb' \
      >> $SDK/kernel-6.1/arch/arm64/boot/dts/rockchip/Makefile
 ```
 
+`linux-side/rootfs/` 下的文件按目标路径镜像，要进的是**根文件系统**而不是内核源码树，
+具体注入点取决于 SDK 用哪种 rootfs（buildroot 的 fs-overlay / Ubuntu 的 overlay 目录
+各不相同），按目录结构原样合并即可。烧好的板子上直接补也一样：
+
+```bash
+scp linux-side/rootfs/etc/NetworkManager/conf.d/wifi-powersave-off.conf \
+    <板子>:/tmp/ && ssh <板子> \
+    'sudo install -m 644 /tmp/wifi-powersave-off.conf /etc/NetworkManager/conf.d/ \
+     && sudo systemctl restart NetworkManager'
+```
+
 关键点（这些 Linux 侧改动与具体 RTOS 无关，任何跑在 cpu3 的 RTOS 通用）：
 - `rk3576-kickpi-k7-amp.dtsi`：`rockchip-amp` 节点保活 UART5 时钟/引脚、GICv2 亲和
   掩码、amp-irqs 路由 113/172 到 cpu3；4 块保留内存；`&cpu_l3 { status="fail"; }`
@@ -132,6 +145,10 @@ echo 'dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3576-kickpi-k7-linux-amp.dtb' \
 - `amp-k7.its`：把 openvela `nuttx.bin` 打进 `amp.img`（cpu=0x3、load=0x41800000、
   hyp=1）；`linux{}` 节点把内核加载地址挪到 0x42000000
 - `parameter-amp.txt`：新增 2MB `amp` 分区
+- `rootfs/etc/NetworkManager/conf.d/wifi-powersave-off.conf`：关掉 WiFi 省电。
+  板子只有 wlan0 可用，sv6621s 省电时把空闲后第一个包压到下一个 beacon，ssh 和
+  板上服务的 RPC 每隔几个来回卡 1～1.7 秒（ping 丢包 30%、avg 453ms）；关掉后
+  往返稳定在 40～160ms、丢包 3.3%
 
 ### 3. 打包并烧写
 
