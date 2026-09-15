@@ -107,7 +107,9 @@ RK3576 Linux SDK，按其原授权分发；本作品对这部分不主张任何�
 
 ### 2. 在 KickPi Linux SDK 上叠加 Linux 侧改动（一次性）
 
-SDK 由 KickPi/板厂渠道获取（Rockchip 私有授权，不可转发，故本仓只提供叠加文件）。
+SDK 从 KickPi 官方公开分享的 `rk3576_data` 获取（Rockchip 私有授权，本仓不二次分发，
+只提供叠加文件）：
+https://pan.baidu.com/s/1ZXgbmzjDFurXs8w8NeSDUw?pwd=z34d ，提取码 `z34d`。
 本作品的开发基线是该 SDK 的 `24a411114`（"feat(dts):update K7 wifi dts name"）。
 Linux 内核与 U-Boot 的 C 代码**一行未改**——下面这几个 dts / config / 分区表文件
 加一个 rootfs 配置，就是 Linux 侧的全部改动。

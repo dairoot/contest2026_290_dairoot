@@ -29,6 +29,7 @@
 | 离线唤醒词开发、调优、对拍与部署到 openvela | [openvela-kws-deployment](skills/openvela-kws-deployment/SKILL.md) |
 | ASR/VAD 迁移到 RKNN、语音模型转换与验收 | [speech-rknn-migration](skills/speech-rknn-migration/SKILL.md) |
 | YOLO 转 RKNN、量化、后处理与检测验收 | [yolo-rknn-migration](skills/yolo-rknn-migration/SKILL.md) |
+| RK3576 SDK 出各分区镜像、打 update.img 整包与烧写 | [rk3576-image-build](skills/rk3576-image-build/SKILL.md) |
 
 - 开发、训练、模型转换和部署排障流程优先维护在对应 Skill；详细命令放在它的 `references/`，可执行实现继续放在现有工具目录。
 - 服务 README 维护用途、启动、运行配置、接口、模型位置和自测入口。ASR、YOLO 的 RKNN 转换教程已集中到 Skills，不再复制回服务 README。
