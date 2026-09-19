@@ -41,6 +41,7 @@ RK3576 上，用一套硬件同时获得 **Linux 的丰富生态** 与 **openvel
 ```
 contest2026_290_dairoot/
 ├── README.md                       本文（作品说明 + 复现导航）
+├── LICENSE                         Apache License 2.0 全文
 ├── contest2026_290_dairoot.xml     repo manifest（board 注入编译树）
 ├── board/contest_board/            ★ 主交付：openvela 板级适配
 │   ├── README.md                   技术设计 + 详细复现步骤
@@ -133,3 +134,17 @@ AI 负责阅读 openvela/NuttX 源码、编写与迭代所有 C 代码、通过 
 
 > 提交前请把 `logs/your-github-login/` 替换为你的真实 GitHub 登录名目录，并按
 > 《AI Coding 日志归集与提交手册》导出本次 Claude Code 会话的 `.jsonl` 到该目录。
+
+## 七、许可证
+
+除文件另有声明外，本项目原创源码采用 **Apache License 2.0**，完整条款见
+[LICENSE](LICENSE)。已有文件中的版权及许可证声明继续有效，包括：
+
+- Linux 麦克风驱动的 [snd_rpmsg_mic.c](board/contest_board/linux-side/snd-rpmsg-mic/snd_rpmsg_mic.c)
+  和 [Makefile](board/contest_board/linux-side/snd-rpmsg-mic/Makefile) 保留 `GPL-2.0` 声明。
+- [AMP 设备树片段](board/contest_board/linux-side/dts/rk3576-kickpi-k7-amp.dtsi)
+  和 [Linux AMP 设备树](board/contest_board/linux-side/dts/rk3576-kickpi-k7-linux-amp.dts)
+  保留 `GPL-2.0+ OR MIT` 双许可证声明。
+
+第三方依赖、模型、数据及固件中包含的系统组件遵循各自的许可证；根目录
+`LICENSE` 不替代这些组件的许可条款。
