@@ -7,13 +7,11 @@
 
 ## 文件与放置位置
 
-下表路径相对项目根目录，合并后的模型文件名与服务默认配置一致。
-ASR 模型使用 5 个分卷交付，前 4 卷各 100,000,000 字节，第 5 卷 95,780,663 字节；
-必须下载全部分卷并按顺序合并，不能将单个分卷直接交给运行器。
+下表路径相对项目根目录，文件名与服务默认配置一致。
 
-| Release 附件 | 模型原文件字节数 | 放置位置 | 用途 |
+| Release 附件 | 字节数 | 放置位置 | 用途 |
 | --- | ---: | --- | --- |
-| [sensevoice_5s.rknn.part01–part05](https://github.com/open-vela/contest2026_290_dairoot/releases/tag/rknn-models-2026-09-19) | 495,780,663 | `linux-apps/asr-server/rknn_models/sensevoice_5s.rknn` | SenseVoiceSmall，5 秒窗、中文 ASR、FP16 |
+| [sensevoice_5s.rknn](https://github.com/open-vela/contest2026_290_dairoot/releases/download/rknn-models-2026-09-19/sensevoice_5s.rknn) | 495,780,663 | `linux-apps/asr-server/rknn_models/sensevoice_5s.rknn` | SenseVoiceSmall，5 秒窗、中文 ASR、FP16 |
 | [eres2netv2_3s.rknn](https://github.com/open-vela/contest2026_290_dairoot/releases/download/rknn-models-2026-09-19/eres2netv2_3s.rknn) | 182,145,392 | `linux-apps/asr-server/rknn_models/eres2netv2_3s.rknn` | ERes2NetV2，3 秒窗、192 维声纹特征、FP16 |
 | [yolo11n_int8.rknn](https://github.com/open-vela/contest2026_290_dairoot/releases/download/rknn-models-2026-09-19/yolo11n_int8.rknn) | 7,261,323 | `linux-apps/miloco-server/yolo11n_int8.rknn` | YOLO11n，640 × 640、COCO 80 类、INT8、九输出 |
 
@@ -27,20 +25,15 @@ ASR 模型使用 5 个分卷交付，前 4 卷各 100,000,000 字节，第 5 卷
 set -e
 release_url=https://github.com/open-vela/contest2026_290_dairoot/releases/download/rknn-models-2026-09-19
 model_download_dir=$(mktemp -d)
-for filename in sensevoice_5s.rknn.part{01..05} eres2netv2_3s.rknn yolo11n_int8.rknn SHA256SUMS MODEL_NOTICES.txt; do
+for filename in sensevoice_5s.rknn eres2netv2_3s.rknn yolo11n_int8.rknn SHA256SUMS; do
   curl --fail --location --retry 3 "$release_url/$filename" -o "$model_download_dir/$filename"
 done
-cat "$model_download_dir"/sensevoice_5s.rknn.part{01..05} > "$model_download_dir/sensevoice_5s.rknn"
 (cd "$model_download_dir" && sha256sum -c SHA256SUMS)
 mkdir -p linux-apps/asr-server/rknn_models
 cp -i "$model_download_dir/sensevoice_5s.rknn" linux-apps/asr-server/rknn_models/
 cp -i "$model_download_dir/eres2netv2_3s.rknn" linux-apps/asr-server/rknn_models/
 cp -i "$model_download_dir/yolo11n_int8.rknn" linux-apps/miloco-server/
 ```
-
-上面的 Bash 命令同时校验 5 个分卷和合并后的模型；合并后的 ASR SHA256 仍为
-`8530d13ccdf6801602a90304162f831830d76a1f7013432a483e765653cd0d5c`，
-与开发板原文件一致。单卷校验失败时仅需重新下载对应分卷，再合并校验。
 
 ASR 和声纹路径可用 `ASR_RKNN_PATH`、`SPEAKER_RKNN_PATH` 修改；ASR 窗长需保持
 `ASR_RKNN_WINDOW_MS=5000`。按[三个 Linux app 服务启动说明](../README.md#linux-app-服务启动)
