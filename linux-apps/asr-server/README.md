@@ -141,10 +141,13 @@ SPEAKER_BACKEND=modelscope uv run python server.py
 ### 板子的 swap
 
 3.8 GB 内存跑 ASR + 声纹 + VAD 峰值能到 2.4 GB，没有 swap 很容易被 OOM killer 端掉。
-这块板子的 zram 是**编进内核**的（不是模块），发行版的 `zram-tools` 死活要 modprobe
-才启动，所以它用不了；改成直接操作 sysfs 的 unit，已经装在
-`/etc/systemd/system/zram-swap.service`（3 GB / zstd，开机自起，`zramswap.service`
-已禁用）。
+这块板子的 zram 是**编进内核**的（不是模块），发行版的 `zram-tools` 启动流程要求
+modprobe，因此改用直接操作 sysfs 的
+[zram-swap.service](../../board/contest_board/linux-side/rootfs/etc/systemd/system/zram-swap.service)。
+板上安装位置为 `/etc/systemd/system/zram-swap.service`，配置为 3 GiB / zstd、
+优先级 100，开机自起，`zramswap.service` 已禁用。安装与检查见
+[Linux 服务部署说明](../../skills/openvela-kws-deployment/references/linux-systemd-services.md)；
+不要在推理服务占用 swap 时直接 restart 或 reset。
 
 ## 测试
 
