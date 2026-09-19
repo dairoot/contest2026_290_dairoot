@@ -67,7 +67,9 @@ manifest `<linkfile>` 注入，以 patch 系列放在 [`nuttx-side/`](nuttx-side
 **完整、可照做的复现步骤在 [`board/contest_board/README.md`](board/contest_board/README.md)。** 概览：
 
 0. **（可选）不编译，直接烧预编译固件** —— `update.img` 首刷 / `amp.img` 迭代，
-   下载与说明见 board README §三.0。
+   下载 [2026-09-15 固件 Release](https://github.com/dairoot/contest2026_290_dairoot/releases/tag/firmware-2026-09-15)。
+   整包以 `update.img.gz` 提供，需先解压并校验；文件 SHA256、镜像来源和刷机后
+   需补装的软件见 [固件交付说明](docs/firmware-2026-09-15.md)。
 1. **编译 openvela 固件**
    ```bash
    # 先给公共仓 nuttx 打上 RK3576 芯片层补丁
