@@ -11,7 +11,7 @@ VAD、ASR 和说话人状态。**ASR 与声纹两个模型都跑在 RK3576 的 6
 
 ## 目录结构
 
-所有模块都在仓库根目录，脚本以仓库根为工作目录运行：
+以下模块位于本目录（`linux-apps/asr-server/`），以本目录为工作目录运行：
 
 ```
 asr_client.py         # AsrClient：音频分块、VAD 驱动、快/慢回复策略
@@ -29,12 +29,15 @@ tests/                # 单元测试 + 浏览器调试页
 
 ## 启动
 
+与摄像头、harness 配套运行时，见总 README 的
+[三个服务启动说明](../../README.md#linux-app-服务启动)。以下命令在本目录执行。
+
 依赖由 [uv](https://docs.astral.sh/uv/) 管理，声明在 `pyproject.toml`，锁定在
 `uv.lock`。`uv sync` 会按 `.python-version`（3.11）自动准备解释器并创建 `.venv`：
 
 ```bash
 uv sync
-uv run python server.py
+uv run server.py
 ```
 
 `uv run` 会在执行前校验环境与锁文件是否一致，不需要手动 `activate`。

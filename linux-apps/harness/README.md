@@ -1,6 +1,22 @@
 # harness
 
-在本目录运行 `uv run main.py`，配置台位于 `http://<板子 IP>:8080`。
+## 启动
+
+先启动 ASR 服务；需要摄像头和米家设备功能时，同时启动 miloco-server。
+完整命令见总 README 的[三个服务启动说明](../../README.md#linux-app-服务启动)。
+在本目录（`linux-apps/harness/`）执行：
+
+```bash
+uv sync
+uv run main.py
+```
+
+配置台位于 `http://<板子 IP>:8080`。以可访问板上麦克风和桌面音频服务的用户运行，
+在配置台选择正确的麦克风；系统还需安装 `libportaudio2` 和 `pulseaudio-utils`。
+同机部署时，在本目录 `.env` 中配置
+`ASR_SERVER_WS_URL=ws://127.0.0.1:8086/ws`，并准备所选 LLM / TTS 后端的个人配置。
+
+## TTS 配置
 
 TTS 引擎选项从 SDK 的 `get_tts_engines()` 动态加载，要求 `aichat-sdk>=0.1.1`。
 当前可选豆包 v1/v2、微软 Edge 和小米 MiMo；选择后保存配置即重启生效。

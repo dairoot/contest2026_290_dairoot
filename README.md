@@ -53,7 +53,8 @@ contest2026_290_dairoot/
 ├── tools/kws/                      ★ 离线唤醒词：训练→导出→对拍→评测→烧写全管线
 ├── linux-apps/                     ★ Linux 侧用户态服务（识别模型都跑 RK3576 NPU）
 │   ├── asr-server/                 语音识别 + 声纹（SenseVoice / ERes2NetV2）
-│   └── miloco-server/              摄像头视频流 VPU 硬解 + yolo11n 检测 + 米家设备开关
+│   ├── miloco-server/              摄像头视频流 VPU 硬解 + yolo11n 检测 + 米家设备开关
+│   └── harness/                    语音对话入口 + Web 配置台 + 本地 MCP
 ├── skills/                         从本项目沉淀的四份可复用开发 Skill
 └── logs/                           AI Coding 日志
 ```
@@ -93,10 +94,51 @@ manifest `<linkfile>` 注入，以 patch 系列放在 [`nuttx-side/`](nuttx-side
    echo KWS_INFO > /dev/ttyRPMSG0 && head -1 /dev/ttyRPMSG0   # 引擎状态
    dmesg | grep 'wake word'                # snd_rpmsg_mic: p=0.9xx
    sudo python3 tools/kws/deploy/wake_watch.py                # KEY_WAKEUP 事件
-   # 唤醒之后的识别服务（默认就走 NPU）
-   cd linux-apps/asr-server && uv sync && uv run python tests/asr_ws/server.py
-   # 浏览器打开 http://<板子IP>:8086/ 说话，看识别结果与说话人编号
    ```
+
+### Linux app 服务启动
+
+在开发板的 Linux 上运行。首次启动前，按各服务 README 安装 `uv`、在各自目录
+准备依赖（`uv sync`）、模型和个人配置；miloco 的虚拟环境还需按其 README 开启
+系统 GStreamer/GI 包访问。麦克风驱动见[板级 README](board/contest_board/README.md)，供电和 zram 见
+[Linux 服务部署说明](skills/openvela-kws-deployment/references/linux-systemd-services.md)。
+
+**打开三个独立终端，每个终端都从 `contest2026_290_dairoot` 的上一级目录开始。**
+下面的进程会一直占用当前终端；先启动摄像头与 ASR 服务，再启动 harness，保持三个
+终端运行。不要把三条命令顺序粘贴到同一个终端中等待执行。
+
+终端 1：摄像头、YOLO 检测和米家设备接口。
+
+```bash
+cd contest2026_290_dairoot/linux-apps/miloco-server && uv run web.py yolo
+```
+
+终端 2：ASR 与声纹 WebSocket 服务。
+
+```bash
+cd contest2026_290_dairoot/linux-apps/asr-server && uv run server.py
+```
+
+终端 3：语音对话入口和配置台。
+
+```bash
+cd contest2026_290_dairoot/linux-apps/harness && uv run main.py
+```
+
+| 服务 | 默认访问地址 | 配置与依赖说明 |
+| --- | --- | --- |
+| miloco-server | `http://<板子IP>:8180/`，摄像头和设备面板 | [服务 README](linux-apps/miloco-server/README.md) |
+| asr-server | `ws://<板子IP>:8086/ws`，识别 WebSocket | [服务 README](linux-apps/asr-server/README.md) |
+| harness | `http://<板子IP>:8080/`，对话配置台 | [服务 README](linux-apps/harness/README.md) |
+
+三个服务按同机部署使用；harness 的 ASR 连接设为
+`ASR_SERVER_WS_URL=ws://127.0.0.1:8086/ws`，米家 MCP 当前连接本机 `8180`。
+在 harness 配置台选择正确的麦克风并保存配置。首次使用 miloco 时按终端提示完成
+米家登录和摄像头选择；YOLO 模型缺失时可能只推流，需检查启动日志中的实际后端。
+
+需要单独调试语音识别时，另见 [ASR 浏览器调试页](linux-apps/asr-server/tests/asr_ws/README.md)。
+调试页入口与正式 ASR 服务默认使用同一端口 `8086`，不要同时启动。以上命令是前台
+手动启动，不会自动注册三个 app 为 systemd 服务。
 
 ## 五、关键技术难点（详见 board README 与提交历史）
 
