@@ -10,11 +10,13 @@
 
 ## 启动
 
+以下命令在本目录（`linux-apps/miloco-server/`）执行；与 ASR、harness 配套运行时，
+见总 README 的[三个服务启动说明](../../README.md#linux-app-服务启动)。
+
 ```bash
 uv venv --python 3.12 --system-site-packages   # 见下面「VPU 硬解」
 uv sync
-uv run web.py            # 只推流
-uv run web.py yolo       # 带 YOLO 检测
+uv run web.py yolo       # 带 YOLO 检测；只推流时改用 uv run web.py
 ```
 
 启动后按提示选摄像头设备；`DEVICE_DID=xxx uv run web.py` 可以跳过这一步。
