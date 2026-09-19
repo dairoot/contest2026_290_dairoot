@@ -78,11 +78,11 @@ openvela 工作区和 KickPi Linux SDK 的 Ubuntu 主机。
 
 | 下载文件 | 用途 | 烧写方式 |
 |---|---|---|
-| [update.img.gz](https://github.com/dairoot/contest2026_290_dairoot/releases/download/firmware-2026-09-15/update.img.gz) | **首刷整包**（解压后 4,151,609,987 字节，含 AMP 分区表、AMP 版 dtb、openvela 固件） | 解压成 `update.img` 后用 RKDevTool 升级模式烧写 |
-| [amp.img](https://github.com/dairoot/contest2026_290_dairoot/releases/download/firmware-2026-09-15/amp.img) | 仅 openvela 固件（1,614,336 字节），迭代用 | `dd` 到 `amp` 分区，见下方第 3 步 |
-| [SHA256SUMS](https://github.com/dairoot/contest2026_290_dairoot/releases/download/firmware-2026-09-15/SHA256SUMS) | 下载文件及解压后整包的 SHA256 | 按下方命令核验 |
+| [update.img.gz](https://github.com/open-vela/contest2026_290_dairoot/releases/download/firmware-2026-09-15/update.img.gz) | **首刷整包**（解压后 4,151,609,987 字节，含 AMP 分区表、AMP 版 dtb、openvela 固件） | 解压成 `update.img` 后用 RKDevTool 升级模式烧写 |
+| [amp.img](https://github.com/open-vela/contest2026_290_dairoot/releases/download/firmware-2026-09-15/amp.img) | 仅 openvela 固件（1,614,336 字节），迭代用 | `dd` 到 `amp` 分区，见下方第 3 步 |
+| [SHA256SUMS](https://github.com/open-vela/contest2026_290_dairoot/releases/download/firmware-2026-09-15/SHA256SUMS) | 下载文件及解压后整包的 SHA256 | 按下方命令核验 |
 
-发布页：[firmware-2026-09-15](https://github.com/dairoot/contest2026_290_dairoot/releases/tag/firmware-2026-09-15)。
+发布页：[firmware-2026-09-15](https://github.com/open-vela/contest2026_290_dairoot/releases/tag/firmware-2026-09-15)。
 下载、解压、校验命令及逐文件哈希见 [固件交付说明](../../docs/firmware-2026-09-15.md)。
 整包超过 GitHub Release 单附件 2 GiB 上限，因此以 gzip 无损压缩分发；烧写工具使用
 解压后的 `update.img`，不要直接烧写 `.gz` 文件。
