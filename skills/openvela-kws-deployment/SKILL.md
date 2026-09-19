@@ -27,6 +27,8 @@ description: 开发嵌入式离线唤醒词并部署到 openvela，覆盖真实�
 | 麦克风选择 | `board/contest_board/configs/nsh/defconfig` |
 
 复现命令、依赖与脚本限制见 [项目执行参考](references/project-workflow.md)。进行训练或部署时再读取对应章节。
+补齐 Linux 侧麦克风供电与 zram 开机服务时，读取
+[Linux 服务部署说明](references/linux-systemd-services.md)，先核对接线及现有 swap 状态。
 
 ## 开发流程
 

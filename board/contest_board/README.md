@@ -308,7 +308,9 @@ openvela 开源版没有可用的离线唤醒引擎（media_trigger 框架的模
   特征过网络，与主机对拍器输出逐微比对，可判定目标机数值是否损坏）、
   `KWS_PEEK`（引擎实际收到的 PCM 峰值 + 最新特征帧抽样，可判定喂数链路）。
 - **三个已踩过的坑**（都已修复/自愈）：①麦克风 VDD 借 GPIO3_D0 当 1.8V 电源，
-  **重启即断电**——已装 systemd 单元 `kws-micpower.service` 开机拉高；②本核
+  **重启即断电**——已装 systemd 单元
+  [kws-micpower.service](../../tools/kws/deploy/kws-micpower.service) 开机拉高，
+  复现见[安装说明](../../skills/openvela-kws-deployment/references/linux-systemd-services.md)；②本核
   先于 Linux 启动，PDM 时钟/引脚配置会被 Linux 启动过程覆盖——`pdm_start()`
   现在每次启动前重断言 CRU/IOC（nuttx 侧补丁），且常听改为 rpmsg 链路建立后
   才开启；③采集线程带 5 秒全零看门狗，输入死寂自动重初始化。
