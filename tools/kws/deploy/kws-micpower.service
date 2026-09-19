@@ -1,0 +1,11 @@
+[Unit]
+Description=Power the PDM microphone rail (GPIO3_D0) for the openvela KWS
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "echo 1 > /sys/class/leds/GPIO3_D0/brightness"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

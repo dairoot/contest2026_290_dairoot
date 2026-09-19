@@ -40,7 +40,11 @@ PDM 麦克风 ──> cpu3 openvela                                Linux (7 核)
 | `deploy/wake_watch.py` | Linux 侧演示：监听 KEY_WAKEUP，可挂任意命令 |
 | `deploy/make_ding.py` + `kws-wakesound.service` | 唤醒「叮咚」反馈音（合成 + 开机自启服务，板上已装） |
 | `deploy/kws-cpufreq.service` | 小核簇 min freq 1.8GHz（DVFS 会拖垮实时预算，板上已装） |
+| [deploy/kws-micpower.service](deploy/kws-micpower.service) | 当前 pin 30 / GPIO3_D0 麦克风供电接法的开机拉高服务 |
 | `data/` `checkpoints/` | 语料与模型产物（gitignore，可全量重建） |
+
+麦克风供电服务与 Linux zram 服务的安装、适用接线及检查见
+[Linux 服务部署说明](../../skills/openvela-kws-deployment/references/linux-systemd-services.md)。
 
 固件侧引擎源码在 `board/contest_board/src/`：`kws_frontend.c`（FFT+mel）、
 `kws_nn.c`（DS-CNN 推理）、`kws_engine.c`（流式判决）、`rk3576_kws.c`
