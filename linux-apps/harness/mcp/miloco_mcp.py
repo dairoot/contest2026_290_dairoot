@@ -26,11 +26,10 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 SERVER_URL = "http://localhost:8180"  # miloco-server，和 harness 同机
 VIDEO_FEED_URL = f"{SERVER_URL}/video_feed"
 BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
-# 不能复用 harness 的 OPENAI_MODEL：deepseek-v4-flash 是纯文本的，图片会被丢掉，
-# 它只会回「我无法查看图片」。带视觉的是 deepseek-v4-flash-vision-exp。
-MODEL = os.getenv("OPENAI_VISION_MODEL", "deepseek-v4-flash-vision-exp")
+# 对话和看摄像头共用 OPENAI_MODEL，当前模型都支持图片输入。
+MODEL = os.getenv("OPENAI_MODEL", "deepseek-v4-flash")
 
-# 这个视觉模型默认开思考：实测 1600 字推理换来慢 3 倍（9.7s vs 3.0s），描述画面用不上。
+# DeepSeek 默认开思考：实测 1600 字推理换来慢 3 倍（9.7s vs 3.0s），描述画面用不上。
 # 字段名各家不一样，跟 SDK 的 openai_client 保持一致按厂商分。
 THINKING_OFF = {"thinking": {"type": "disabled"}} if "deepseek" in MODEL.lower() else {"enable_thinking": False}
 

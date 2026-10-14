@@ -7,9 +7,13 @@
 在本目录（`linux-apps/harness/`）执行：
 
 ```bash
+cp .env.example .env   # 首次配置；已有 .env 时跳过，先填写所选 LLM / TTS 的凭据
 uv sync
 uv run main.py
 ```
+
+[`.env.example`](.env.example) 包含 ASR 地址、LLM 和各 TTS 后端配置。对话与看摄像头共用 `OPENAI_MODEL`。
+`main.py` 自动读取 `.env` 并覆盖同名进程环境变量，修改后重启服务生效。
 
 配置台位于 `http://<板子 IP>:8080`。以可访问板上麦克风和桌面音频服务的用户运行，
 在配置台选择正确的麦克风；系统还需安装 `libportaudio2` 和 `pulseaudio-utils`。
