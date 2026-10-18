@@ -161,7 +161,7 @@ modprobe，因此改用直接操作 sysfs 的
 uv run python -m unittest discover -s tests
 ```
 
-包含调试页声纹存储、embedding 接口及使用模拟 ASR 的本地 WebSocket 集成测试，需要允许绑定回环端口；
+包含调试页声纹存储、embedding 接口、预设声纹配置及使用模拟 ASR 的本地 WebSocket 集成测试，需要允许绑定回环端口；
 不会加载真实语音模型或打开麦克风。
 
 `tests/asr_ws/` 是浏览器调试页：`uv run python tests/asr_ws/server.py` 后打开
@@ -234,22 +234,47 @@ ws://<host>:8086/ws
 | --- | --- | --- |
 | `type` | string | 消息类型，识别结果固定为 `stt`。 |
 | `speaker_id` | string | ASR 模型返回的说话人 ID；模型不提供时为空字符串。 |
-| `speaker` | string | 声纹匹配得到的匿名说话人编号，如 `speaker_1`、`speaker_2`；有效语音不足 1500 ms 时为 `unknown`。 |
+| `speaker` | string | 优先返回匹配的预设姓名；未匹配时返回匿名编号，如 `speaker_1`、`speaker_2`；有效语音不足 1500 ms 时为 `unknown`。 |
 | `content` | string | 本次语音识别得到的文本。 |
 | `audio_url` | string \| null | 本段 WAV 录音的 HTTP 相对地址；录音不在配置目录内时为 `null`。 |
 | `elapsed` | number | ASR 推理耗时，单位为秒。 |
 | `embedding` | number[] | 说话人声纹向量，可用于说话人匹配或聚类。 |
 | `speech_ms` | number | VAD 检测到的有效语音时长，单位为毫秒。 |
 
-主服务在每次 STT 回包前调用 `SpeakerWorker.get_speaker_name()`，同一连接内相似声纹
-沿用编号，新声纹分配新编号。编号和临时样本仅保存在该连接的内存中，重新连接后从
-`speaker_1` 开始；不保存真实姓名或具名声纹库。SDK 与 harness 原样使用返回的 `speaker`，
-harness 不再进行二次声纹匹配。
+主服务在每次 STT 回包前调用 `SpeakerWorker.get_speaker_name()`，优先匹配当前连接的预设姓名；
+没有匹配时，同一连接内相似声纹沿用编号，新声纹分配新编号。预设和匿名样本仅保存在
+该连接的内存中，重新连接后匿名编号从 `speaker_1` 开始，预设需重新发送。
+SDK 与 harness 原样使用返回的 `speaker`，harness 不再进行二次声纹匹配。
 独立 `/embedding` 接口仍只返回向量，不分配编号。
 
 除新增 `speaker`、本地 `audio_path` 被转换为 `audio_url` 外，其余字段与 `AsrClient` 的 `stt`
 事件一致；NumPy 数组会转换为 JSON 数组。协议或音频格式错误会返回
 `{"type":"error", ...}`，不会作为音频送入识别器。
+
+### 设置预设声纹
+
+在同一个 `/ws` 连接内发送 JSON 文本帧，建议在首次上传音频前设置：
+
+```json
+{"type":"set_speaker_profiles","profiles":[{"name":"张三","embedding":[1.0,0.0,0.0]}]}
+```
+
+示例向量仅演示格式，实际应使用同一声纹模型提取的完整 embedding。同名可传多个样本。
+每条消息全量替换当前连接的预设，`profiles: []` 清空；录入、删除后可在连接内再次发送。
+服务端校验并归一化全部向量，成功后返回：
+
+```json
+{"type":"speaker_profiles_set","ok":true,"speakers":1,"samples":1}
+```
+
+客户端收到确认后再上传音频。姓名需为 1～40 个字符且不能包含控制字符；向量需非空、有限且非零，
+所有预设向量维度一致、最多 4096 维；每人最多 10 个样本，总计最多 1000 个样本，
+同时受 WebSocket 单帧大小限制（默认 1 MiB）。无效请求返回
+`{"type":"error","code":"invalid_speaker_profiles","message":"..."}`，原预设保持不变。
+
+配置消息不会加载语音模型或写入文件，只影响当前连接；客户端负责持久化并在重连后重发。
+预设匹配使用同名样本的 centroid、余弦阈值和次优分差规则，预设样本不会被识别结果自动补充。
+有效语音不足 1.5 秒仍返回 `unknown`；模型维度不同的预设不参与匹配。
 
 ## 声纹 embedding 接口
 
@@ -265,7 +290,7 @@ harness 不再进行二次声纹匹配。
 3 秒，与 `AsrClient` 的声纹输入窗口一致。不要把一段音频拆成多条消息上传。
 连接可复用，每条完整音频对应一条 JSON 响应。
 
-客户端自行保存姓名和 embedding，并完成匹配。该接口不保存音频、姓名或声纹资料，
+客户端自行保存姓名和 embedding，可通过 `/ws` 设置预设让 ASR 匹配姓名。该接口不保存音频、姓名或声纹资料，
 只加载声纹模型，不启动 VAD / ASR。原有 `/ws` 返回的 `stt.embedding` 也可以直接使用。
 
 例如已有一段 `speaker.f32` 音频时：

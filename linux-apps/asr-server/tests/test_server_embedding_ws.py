@@ -209,6 +209,80 @@ class EmbeddingWebSocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len({item["name"] for item in first.speaker.speaker_list}), 2)
         self.assertEqual(len({item["name"] for item in second.speaker.speaker_list}), 1)
 
+    async def set_profiles(self, ws, profiles):
+        await ws.send(json.dumps({"type": "set_speaker_profiles", "profiles": profiles}))
+        return await self.receive(ws)
+
+    async def test_set_presets_before_audio_returns_real_name_then_clear_restores_anonymous(self):
+        async with websockets.connect(self.url + "/ws", proxy=None) as ws:
+            result = await self.set_profiles(ws, [
+                {"name": " 张三 ", "embedding": [3, 0, 0]},
+                {"name": "张三", "embedding": [1, 0.1, 0]},
+            ])
+            self.assertEqual(result, {"type": "speaker_profiles_set", "ok": True, "speakers": 1, "samples": 2})
+            self.asr_factory.assert_not_called()
+            self.speaker_factory.assert_not_called()
+            await ws.send(self.pcm())
+            self.assertEqual((await self.receive(ws))["speaker"], "张三")
+            self.assertEqual(self.asr_client.speaker.speaker_list, [])  # 预设不污染自动学习。
+            self.assertEqual((await self.set_profiles(ws, []))["samples"], 0)
+            await ws.send(self.pcm())
+            self.assertEqual((await self.receive(ws))["speaker"], "speaker_1")
+
+    async def test_invalid_preset_replacement_preserves_previous_names(self):
+        async with websockets.connect(self.url + "/ws", proxy=None) as ws:
+            await self.set_profiles(ws, [{"name": "张三", "embedding": [1, 0, 0]}])
+            for invalid in (
+                None, {}, [None], [{"name": "", "embedding": [1]}],
+                [{"name": "名" * 41, "embedding": [1]}],
+                [{"name": "张三", "embedding": [0, 0, 0]}],
+                [{"name": "张三", "embedding": [float("nan"), 0]}],
+                [{"name": "张三", "embedding": [1, 0]}, {"name": "李四", "embedding": [1]}],
+                [{"name": "张三", "embedding": [1] * 4097}],
+                [{"name": "张三", "embedding": [1, 0, 0]}] * 11,
+                [{"name": "张三", "embedding": [1]}] * 1001,
+            ):
+                with self.subTest(invalid=str(invalid)[:80]):
+                    self.assertEqual((await self.set_profiles(ws, invalid))["code"], "invalid_speaker_profiles")
+            self.asr_factory.assert_not_called()
+            await ws.send(self.pcm())
+            self.assertEqual((await self.receive(ws))["speaker"], "张三")
+
+    async def test_presets_override_existing_anonymous_matches_and_respect_short_speech(self):
+        async with websockets.connect(self.url + "/ws", proxy=None) as ws:
+            await ws.send(self.pcm())
+            self.assertEqual((await self.receive(ws))["speaker"], "speaker_1")
+            await self.set_profiles(ws, [{"name": "张三", "embedding": [1, 0, 0]}])
+            self.asr_client.results = [
+                {"content": "短句", "embedding": np.array([1, 0, 0]), "speech_ms": 500},
+                {"content": "完整语句", "embedding": np.array([1, 0, 0]), "speech_ms": 2000},
+                {"content": "其他人", "embedding": np.array([0, 1, 0]), "speech_ms": 2000},
+            ]
+            for expected in ("unknown", "张三", "speaker_2"):
+                await ws.send(self.pcm())
+                self.assertEqual((await self.receive(ws))["speaker"], expected)
+
+    async def test_preset_names_do_not_leak_to_other_connections(self):
+        self.asr_factory.side_effect = lambda **kwargs: FakeAsrClient()
+        async with websockets.connect(self.url + "/ws", proxy=None) as first:
+            await self.set_profiles(first, [{"name": "张三", "embedding": [1, 0, 0]}])
+            await first.send(self.pcm())
+            self.assertEqual((await self.receive(first))["speaker"], "张三")
+            async with websockets.connect(self.url + "/ws", proxy=None) as second:
+                await second.send(self.pcm())
+                self.assertEqual((await self.receive(second))["speaker"], "speaker_1")
+                # 同一个向量可以在不同客户端配置为不同姓名，更新和清空也互不影响。
+                await self.set_profiles(second, [{"name": "李四", "embedding": [1, 0, 0]}])
+                await first.send(self.pcm())
+                self.assertEqual((await self.receive(first))["speaker"], "张三")
+                await second.send(self.pcm())
+                self.assertEqual((await self.receive(second))["speaker"], "李四")
+                await self.set_profiles(first, [])
+                await first.send(self.pcm())
+                self.assertEqual((await self.receive(first))["speaker"], "speaker_1")
+                await second.send(self.pcm())
+                self.assertEqual((await self.receive(second))["speaker"], "李四")
+
     async def test_wrong_websocket_path_is_rejected(self):
         with self.assertRaises(websockets.exceptions.InvalidStatus):
             async with websockets.connect(self.url + "/other", proxy=None):

@@ -4,9 +4,9 @@ Clients send raw 16 kHz mono Float32LE PCM in binary WebSocket messages.  The
 transport validates and forwards each message as it arrives; ``AsrClient``
 normalizes arbitrary message boundaries into 240 ms processing blocks.  Every
 ``stt`` event is returned as a JSON text message.
-STT messages include a connection-local anonymous speaker label. The separate
+STT messages include a preset name or connection-local anonymous speaker label. The separate
 /embedding endpoint extracts only an embedding from one complete audio clip.
-Named speaker profiles and real-name matching belong to the client.
+Clients can set connection-local speaker profiles; persistent storage stays on the client.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from websockets.datastructures import Headers
 from websockets.http11 import Response
 
 from config import ASR_MODEL_TYPE
+from voiceprint_store import VoiceprintStore, MAX_SAMPLES_PER_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,8 @@ SAMPLE_BYTES = np.dtype("<f4").itemsize
 SAMPLE_RATE = 16000
 MIN_EMBEDDING_SAMPLES = SAMPLE_RATE * 1500 // 1000
 MAX_EMBEDDING_SAMPLES = SAMPLE_RATE * 3
+MAX_PRESET_SAMPLES = 1000
+MAX_PRESET_DIMENSION = 4096
 
 AsrClientFactory = Callable[..., Any]
 
@@ -180,6 +183,28 @@ def _decode_audio(message: Any) -> tuple[np.ndarray | None, dict[str, str] | Non
     return None, {"type": "error", "code": code, "message": reason}
 
 
+def validate_speaker_profiles(profiles: Any) -> list[dict]:
+    """Validate the entire replacement before changing any connection state."""
+    if not isinstance(profiles, list) or len(profiles) > MAX_PRESET_SAMPLES:
+        raise ValueError(f"profiles must be a list with at most {MAX_PRESET_SAMPLES} samples")
+    samples, counts, dimension = [], {}, None
+    for profile in profiles:
+        if not isinstance(profile, dict):
+            raise ValueError("each profile must contain name and embedding")
+        name = VoiceprintStore.validate_name(profile.get("name"))
+        vector = VoiceprintStore.prepare_embedding(profile.get("embedding"))
+        if vector.size > MAX_PRESET_DIMENSION:
+            raise ValueError(f"embedding dimension must not exceed {MAX_PRESET_DIMENSION}")
+        if dimension is not None and vector.size != dimension:
+            raise ValueError("all preset embeddings must have the same dimension")
+        dimension = vector.size
+        counts[name] = counts.get(name, 0) + 1
+        if counts[name] > MAX_SAMPLES_PER_NAME:
+            raise ValueError(f"each name supports at most {MAX_SAMPLES_PER_NAME} samples")
+        samples.append({"name": name, "embedding": vector})
+    return samples
+
+
 async def handle_embedding_connection(
     websocket: Any, *, worker_factory: Callable[[], Any] | None = None,
 ) -> None:
@@ -232,6 +257,7 @@ async def handle_connection(
 
     factory = client_factory or _create_asr_client
     asr_client = None
+    preset_speakers = []
     processor_task = None
     remote_address = getattr(websocket, "remote_address", None)
     logger.info("ASR WebSocket connected: %s", remote_address)
@@ -239,6 +265,7 @@ async def handle_connection(
     async def send_stt(payload: dict[str, Any]) -> None:
         speaker_name, _ = asr_client.speaker.get_speaker_name(
             payload["embedding"], speech_ms=payload.get("speech_ms"),
+            preset_speakers=preset_speakers,
         )
         await websocket.send(serialize_stt(
             {**payload, "speaker": speaker_name}, audio_save_dir=audio_save_dir,
@@ -246,6 +273,24 @@ async def handle_connection(
 
     try:
         async for message in websocket:
+            if isinstance(message, str):
+                try:
+                    command = json.loads(message)
+                except ValueError:
+                    command = None
+                if isinstance(command, dict) and command.get("type") == "set_speaker_profiles":
+                    try:
+                        replacement = validate_speaker_profiles(command.get("profiles"))
+                    except ValueError as exc:
+                        response = {"type": "error", "code": "invalid_speaker_profiles", "message": str(exc)}
+                    else:
+                        preset_speakers = replacement
+                        response = {
+                            "type": "speaker_profiles_set", "ok": True,
+                            "speakers": len({item["name"] for item in replacement}), "samples": len(replacement),
+                        }
+                    await websocket.send(json.dumps(response, ensure_ascii=False))
+                    continue
             chunk, error = _decode_audio(message)
             if error is not None:
                 await websocket.send(json.dumps(error))

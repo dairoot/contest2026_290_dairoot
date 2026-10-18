@@ -1,8 +1,10 @@
 """harness 本地声纹库与 ASR 接入；embedding 不放进对话消息或浏览器状态。"""
 
 from collections import OrderedDict
+import asyncio
 from datetime import datetime, timezone
 from inspect import signature
+import json
 import logging
 from pathlib import Path
 
@@ -12,12 +14,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from aichat_sdk import ChatBot
+from aichat_sdk.asr.asr_client import AsrWebSocketClient
 from session_store import Base, _read_database
 
 logger = logging.getLogger("web_console")
 MIN_SPEECH_MS = 1500
 MAX_SAMPLES = 10
 MAX_UTTERANCES = 200
+PROFILE_SYNC_TIMEOUT = 5
 
 
 class Voiceprint(Base):
@@ -69,9 +73,19 @@ class VoiceprintStore:
         self._load()
         return [{"name": name, "samples": len(vectors)} for name, vectors in sorted(self._profiles.items())]
 
+    def export_samples(self) -> list[dict]:
+        self._load()
+        if self.error:
+            raise ValueError(self.error)
+        return [
+            {"name": name, "embedding": vector.tolist()}
+            for name, vectors in sorted(self._profiles.items()) for vector in vectors
+        ]
+
     def add(self, name: str, vector: np.ndarray):
-        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 40:
-            raise ValueError("姓名需为 1～40 个字符")
+        if (not isinstance(name, str) or not name.strip() or len(name.strip()) > 40
+                or any(ord(char) < 32 for char in name.strip())):
+            raise ValueError("姓名需为 1～40 个字符，不能包含换行等控制字符")
         name = name.strip()
         vector = normalize(vector)
         self._load()
@@ -121,6 +135,15 @@ class VoiceprintClient:
     def __init__(self, path: str):
         self.store = VoiceprintStore(path)
         self.utterances = OrderedDict()
+        self.revision = 0
+        self.changed = asyncio.Event()
+        self.sync_state = {"connected": False, "pending": True, "error": ""}
+
+    def profiles_changed(self):
+        self.revision += 1
+        self.sync_state["pending"] = True
+        self.changed.set()
+        self.changed = asyncio.Event()
 
     def capture(self, payload: dict):
         audio_url = payload.get("audio_url")
@@ -146,6 +169,7 @@ class VoiceprintClient:
     def status(self) -> dict:
         return {
             "profiles": self.store.summary(), "error": self.store.error,
+            "sync": dict(self.sync_state),
             "utterances": {
                 url: {key: value for key, value in item.items() if key != "vector"}
                 for url, item in self.utterances.items()
@@ -159,22 +183,109 @@ class VoiceprintClient:
         if item["error"]:
             raise ValueError(item["error"])
         item["enrolled_name"] = self.store.add(name, item["vector"])
+        self.profiles_changed()
 
     def remove(self, name: str):
         self.store.remove(name)
+        self.profiles_changed()
         for item in self.utterances.values():
             if item["enrolled_name"] == name:
                 item["enrolled_name"] = ""
 
 
+class PresetAsrClient(AsrWebSocketClient):
+    """沿用 SDK 0.1.2 的语音链路，在同一连接内同步本地预设样本。"""
+
+    def __init__(self, url, voiceprints, **kwargs):
+        super().__init__(url, **kwargs)
+        self.voiceprints = voiceprints
+        self._profile_ack = None
+        self._sent_revision = -1
+
+    async def _sync_profiles(self, websocket):
+        revision = self.voiceprints.revision
+        profiles = self.voiceprints.store.export_samples()
+        self._profile_ack = asyncio.get_running_loop().create_future()
+        try:
+            await websocket.send(json.dumps({"type": "set_speaker_profiles", "profiles": profiles}, ensure_ascii=False))
+            reply = await asyncio.wait_for(self._profile_ack, PROFILE_SYNC_TIMEOUT)
+            if not reply.get("ok") or reply.get("samples") != len(profiles):
+                raise ValueError("ASR 未确认完整的预设声纹，请更新 ASR 服务")
+            self._sent_revision = revision
+            self.voiceprints.sync_state.update(
+                connected=True, pending=revision != self.voiceprints.revision, error="",
+            )
+        finally:
+            if not self._profile_ack.done():
+                self._profile_ack.cancel()
+            self._profile_ack = None
+
+    async def _watch_profiles(self, websocket):
+        while True:
+            changed = self.voiceprints.changed
+            if self._sent_revision != self.voiceprints.revision:
+                await self._sync_profiles(websocket)
+            else:
+                await changed.wait()
+
+    async def _send_audio(self, websocket):
+        tasks = set()
+        self._sent_revision = -1
+        self.voiceprints.sync_state.update(connected=True, pending=True)
+        try:
+            # 先确认预设声纹已生效，再让麦克风音频进入识别链路。
+            await self._sync_profiles(websocket)
+            tasks = {
+                asyncio.create_task(super()._send_audio(websocket)),
+                asyncio.create_task(self._watch_profiles(websocket)),
+            }
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
+        except Exception as exc:
+            self.voiceprints.sync_state["error"] = str(exc) or "ASR 声纹同步超时，请检查或更新 ASR 服务"
+            raise
+        finally:
+            self.voiceprints.sync_state.update(connected=False, pending=True)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _receive_results(self, websocket):
+        async def results():
+            async for raw in websocket:
+                try:
+                    message = json.loads(raw) if isinstance(raw, str) else None
+                except ValueError:
+                    message = None
+                if isinstance(message, dict):
+                    ack = self._profile_ack
+                    if message.get("type") == "speaker_profiles_set":
+                        if ack is not None and not ack.done():
+                            ack.set_result(message)
+                        continue
+                    if message.get("type") == "error" and message.get("code") in (
+                        "invalid_speaker_profiles", "binary_audio_required",
+                    ) and ack is not None and not ack.done():
+                        reason = message.get("message", "ASR 拒绝预设声纹")
+                        if message["code"] == "binary_audio_required":
+                            reason = "ASR 服务尚不支持预设声纹，请更新 ASR 服务"
+                        ack.set_exception(ValueError(reason))
+                        continue
+                yield raw
+
+        await super()._receive_results(results())
+
+
 class VoiceprintChatBot(ChatBot):
-    """说话人由 SDK 原样透传；这里只缓存语音样本供手动录入。"""
+    """同步预设声纹，姓名匹配和 speaker 返回均由 ASR 服务完成。"""
 
     def __init__(self, *, voiceprints: VoiceprintClient, **kwargs):
         if "speaker" not in signature(ChatBot.send_text).parameters:
-            raise RuntimeError("当前 aichat-sdk 不支持 speaker 参数，请更新 SDK；本地联调可用 PYTHONPATH 指向 SDK 源码目录")
+            raise RuntimeError("当前 aichat-sdk 不支持 speaker 参数，请执行 uv sync 安装 aichat-sdk>=0.1.2")
         super().__init__(**kwargs)
         self.voiceprints = voiceprints
+        self.asr = PresetAsrClient(self.asr.url, voiceprints)
         self.voiceprints.utterances.clear()
-        # 先于 SDK 的 reg_asr 注册，只保留供手动录入的 embedding，不改写 speaker。
+        # 只保留供手动录入的 embedding，不在 harness 做姓名匹配。
         self.asr.on("stt")(voiceprints.capture)
