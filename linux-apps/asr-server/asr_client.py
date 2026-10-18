@@ -39,8 +39,7 @@ def get_asr_worker(model_type):
             return SenseVoiceRknnWorker()
             
         model_type = "sense_voice"
-    # sense_voice_onnx 是历史别名，PyTorch 那份后端已经删掉
-    if model_type in ("sense_voice", "sense_voice_onnx"):
+    if model_type == "sense_voice":
         from asr_model.asr_sense_voice_onnx import SenseVoiceOnnxWorker
 
         return SenseVoiceOnnxWorker()
@@ -64,7 +63,7 @@ class AsrClient(AsyncEventEmitter):
         self.asr = get_asr_worker(model_type)
         self.speaker = SpeakerWorker()
 
-        self.audio_queue: asyncio.Queue[np.ndarray | tuple[np.ndarray, float]] = asyncio.Queue()
+        self.audio_queue: asyncio.Queue[tuple[np.ndarray, float]] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         # WebSocket / sounddevice 都可以提交任意长度的音频。先在这里重组为
         # VAD 需要的 240 ms 块，transport 不再负责切块。
@@ -87,12 +86,7 @@ class AsrClient(AsyncEventEmitter):
     async def process_audio_chunk(self) -> None:
         while True:
             try:
-                item = await self.audio_queue.get()
-                if isinstance(item, tuple):
-                    chunk, end_ts_ms = item
-                else:
-                    # 兼容仍直接向 audio_queue 写入 ndarray 的旧宿主。
-                    chunk, end_ts_ms = item, time.time() * 1000
+                chunk, end_ts_ms = await self.audio_queue.get()
                 await self._send_audio_chunk(chunk, end_ts_ms=end_ts_ms)
             except Exception:
                 self.clear()
@@ -149,7 +143,7 @@ class AsrClient(AsyncEventEmitter):
                 speech_ms += max(0.0, float(end_ms) - active_start_ms)
                 active_start_ms = None
 
-        # 正常 reply 发生在 VAD 闭合后；这里兼容达到 60 秒上限时仍未闭合的语音段。
+        # 达到 60 秒上限时仍可能有未闭合的语音段，将其计入有效语音时长。
         if active_start_ms is not None:
             speech_ms += max(0.0, self.vad_elapsed_ms - active_start_ms)
 

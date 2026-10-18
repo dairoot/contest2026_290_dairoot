@@ -31,19 +31,30 @@ class TtsConfigTest(unittest.TestCase):
         with patch.object(main, "detect_location", return_value={}):
             self.assertEqual(main.load_config()["tts_engine"], main.DEFAULT_TTS_ENGINE)
 
-    def test_saved_legacy_names_migrate_without_remapping_new_v2(self):
-        for old, expected in (
-            ("bytedance", "bytedancev1"), (" V3 ", "bytedancev2"),
-            ("bytedancev3", "bytedancev2"), ("v2", "v2"),
-            ("bytedancev2", "bytedancev2"), ("mimo", "mimo"),
-            ("unknown", "unknown"),
-        ):
-            with self.subTest(engine=old):
-                self.path.write_text(json.dumps({"tts_engine": old}), encoding="utf-8")
+    def test_saved_current_config_round_trips_without_injecting_mcp_servers(self):
+        for engine in main.get_tts_engines():
+            with self.subTest(engine=engine["name"]):
+                saved = {**self.config, "tts_engine": engine["name"], "mcp": {"mcpServers": {}}}
+                self.path.write_text(json.dumps(saved), encoding="utf-8")
                 loaded = main.load_config()
-                self.assertEqual(loaded["tts_engine"], expected)
+                self.assertEqual(loaded, saved)
                 main.save_config(loaded)
-                self.assertEqual(main.load_config()["tts_engine"], expected)
+                self.assertEqual(main.load_config(), saved)
+
+    def test_saved_removed_tts_names_are_rejected(self):
+        for name in ("bytedance", "v3", "bytedancev3"):
+            with self.subTest(engine=name):
+                self.path.write_text(json.dumps({**self.config, "tts_engine": name}), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "tts_engine"):
+                    main.load_config()
+
+    def test_saved_invalid_tool_toggles_are_rejected(self):
+        for key in ("aichat_tools", "skills"):
+            for value in ([], None, "invalid"):
+                with self.subTest(key=key, value=value):
+                    self.path.write_text(json.dumps({**self.config, key: value}), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, key):
+                        main.load_config()
 
     def test_sdk_names_and_aliases_are_saved_as_canonical_names(self):
         for engine in main.get_tts_engines():

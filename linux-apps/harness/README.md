@@ -29,11 +29,11 @@ uv run main.py
 姓名和归一化后的 embedding 保存在 **harness 本机**的 `data/history.sqlite3`，
 使用 SQLAlchemy ORM 的 `Voiceprint` 模型及 `voiceprints` 表（`name`、`embeddings`、`updated_at`），
 与聊天记录共用数据库，重启后自动读取。浏览器不保存声纹；ASR 只在当前连接内存中保留预设。
-数据库在首次录入时自动创建，新表兼容已有聊天数据库，无需手工迁移。
+数据库及当前全部表在首次保存会话或录入声纹时自动创建。
 
 harness 在 ASR WebSocket 建连后发送 `set_speaker_profiles`，收到确认后开始上传音频。
 录入、删除后会全量更新预设，断线重连后重新发送；ASR 不会把预设写入磁盘。
-声纹弹窗显示同步状态，保存成功但同步失败时会提示原因；旧版 ASR 需更新后一起重启。
+声纹弹窗显示同步状态，保存成功但同步失败时会提示原因。
 
 harness 直接使用 ASR `/ws` 的 STT 消息中的 `embedding`、`speech_ms` 和 `audio_url`，
 无需重复请求 `/embedding`。需使用当前的 [asr-server](../asr-server/README.md)。
@@ -64,7 +64,7 @@ uv run python -m unittest -v tests.test_voiceprint tests.test_asr_preset_sync te
 
 ## TTS 配置
 
-TTS 引擎选项从 SDK 的 `get_tts_engines()` 动态加载，要求 `aichat-sdk>=0.1.1`。
+TTS 引擎选项从 SDK 的 `get_tts_engines()` 动态加载，项目使用 `aichat-sdk>=0.1.2`。
 当前可选豆包 v1/v2、微软 Edge 和小米 MiMo；选择后保存配置即重启生效。
 MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mimo_default`）
 和 `MIMO_TTS_INSTRUCTIONS`。
@@ -74,17 +74,14 @@ MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mim
 填写 `.env` 后需重启服务；Edge 无需这些凭据。连接失败时分别提示 ASR 或所选 TTS 引擎，
 不再把所有初始化失败统一显示为“ASR / TTS 连接失败”。
 
-旧页面保存的 `bytedance`、`v3` 启动时分别迁移为 `bytedancev1`、`bytedancev2`，
-保存后写回 `config.json`。若曾手动填写 SDK 0.1.0 的 `v2` / `bytedancev2`，
-升级后需改选 `bytedancev1` 才能保持原引擎；SDK 0.1.1 的 `v2` 现在指豆包 v2。
+`config.json` 在启动时按当前配置格式校验，TTS 名称使用当前 SDK 目录。
 
 本地 MCP 服务脚本集中放在 `mcp/`：
 
 - `mcp/miloco_mcp.py`：米家设备和摄像头，读取 harness 根目录的 `.env`。
 - `mcp/volume_mcp.py`：本机扬声器音量。
 
-配置中的脚本路径相对于 harness 目录。搬目录前保存的这两个脚本旧路径会在
-启动时自动迁移；保存配置后写入 `config.json`。
+配置中的脚本路径相对于 harness 目录；MCP 服务列表以保存的配置为准。
 
 ## 聊天记录
 
@@ -93,7 +90,6 @@ MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mim
 也会补存尚未保存的会话；只有系统提示词、没有聊天内容的会话不保存。
 数据库及目录在首次保存时自动创建，使用 SQLAlchemy ORM 的 `ChatSession`、
 `ChatMessage` 模型及事务管理。更新代码后执行 `uv sync` 安装 ORM 依赖。
-已有历史记录时，停止 harness 后将旧的 `sessions/` 目录重命名为 `data/`。
 
 `.env` 中的 `DEBUG` 默认是 `false`。设置 `DEBUG=true` 并重启服务后，
 每轮会话还会在 `data/` 下保存一个 `<UTC开始时间>-<会话ID>.jsonl` 调试文件，
@@ -102,11 +98,18 @@ MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mim
 关闭 `DEBUG` 仅停止生成新的 JSONL 文件，SQLite 聊天记录照常保存。
 
 `sessions` 表保存唯一会话 ID、UTC 开始时间和结束时间；`messages` 表按
-`session_id`、从 0 开始的连续 `position` 保存角色和原消息的 `content` 值，
-过滤所有 `role=system` 的消息。`content` 字符串原样保存，空值或缺省值存为 SQL NULL，
-结构化内容存为 JSON 文本；不再包含外层 `role`、`time`、`tool_calls`、`audio_url` 等字段。
-若原 `content` 是包含 `text`、`time`、`round` 的 JSON 字符串，也会原样保留。
+`session_id`、从 0 开始的连续 `position` 保存角色和正文，过滤所有 `role=system` 的消息。
+`role=user` 的 `content` 为包含字符串 `text` 的 JSON 对象或 JSON 字符串时，
+正文只保存 `text`，例如 `{"text":"查一下天气。","speaker":"unknown"}` 保存为 `查一下天气。`。
+其他正文字符串原样保存，空值或缺省值存为 SQL NULL，结构化内容存为 JSON 文本；
+正文不包含外层 `role`、`time`、`tool_calls`、`audio_url` 等字段。
 token 用量保存在独立的 JSON 字段 `usage`，没有用量数据时为 SQL NULL。
+发送时间保存在独立的文本字段 `time`，优先使用消息顶层 `time`，缺失时提取
+`content` JSON 对象中的 `time`；保留原时间文本和时区偏移，没有时间时为 SQL NULL。
+说话人保存在独立的文本字段 `speaker`，优先使用消息顶层 `speaker`，缺失时提取
+`content` JSON 对象中的 `speaker`；没有说话人时为 SQL NULL。
+表结构由新数据库创建，不自动迁移旧数据库。
+历史摘要和详情直接使用已入库的正文文本，不再解析正文中的 JSON。
 会话和消息在同一事务中写入，同一轮只保存一次。
 录音文件仍由 ASR 服务管理。
 该目录已在 Git 忽略规则中。
@@ -115,7 +118,7 @@ token 用量保存在独立的 JSON 字段 `usage`，没有用量数据时为 SQ
 
 ```bash
 sqlite3 data/history.sqlite3 'SELECT id, started_at, ended_at FROM sessions ORDER BY started_at DESC LIMIT 10;'
-sqlite3 data/history.sqlite3 "SELECT content, usage FROM messages WHERE session_id = '会话ID' ORDER BY position;"
+sqlite3 data/history.sqlite3 "SELECT time, speaker, content, usage FROM messages WHERE session_id = '会话ID' ORDER BY position;"
 ```
 
 数据库和调试文件独立保存，写入失败会记录错误日志，不打断对话；
@@ -134,7 +137,7 @@ sqlite3 data/history.sqlite3 "SELECT content, usage FROM messages WHERE session_
 - `GET /api/sessions?q=关键词&limit=20&offset=0`：返回 `sessions` 摘要列表、`total`、`limit` 和 `offset`。
   `q` 同时匹配会话 ID 和任意消息内容，最长 200 字符；`limit` 为 1～100，`offset` 为非负整数。
 - `GET /api/sessions/{session_id}`：返回 `session` 及按 `position` 排序的 `messages`，
-  每条消息包含 `position`、`role`、`content`、`usage`。会话不存在时返回 404。
+  每条消息包含 `position`、`role`、`speaker`、`time`、`content`、`usage`。会话不存在时返回 404。
 
 数据库尚不存在时返回空列表，不创建文件；数据库不可读时返回 503，详细原因记录在服务日志。
 

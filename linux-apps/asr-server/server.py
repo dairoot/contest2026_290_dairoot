@@ -49,10 +49,8 @@ AsrClientFactory = Callable[..., Any]
 
 
 def _request_path(websocket: Any) -> str:
-    """Read the request path across websockets 12+ server APIs."""
-    request = getattr(websocket, "request", None)
-    raw_path = getattr(request, "path", None) or getattr(websocket, "path", "")
-    return urlparse(raw_path).path
+    """Read the request path from the current websockets server connection."""
+    return urlparse(websocket.request.path).path
 
 
 def _json_value(value: Any) -> Any:
@@ -264,7 +262,7 @@ async def handle_connection(
 
     async def send_stt(payload: dict[str, Any]) -> None:
         speaker_name, _ = asr_client.speaker.get_speaker_name(
-            payload["embedding"], speech_ms=payload.get("speech_ms"),
+            payload["embedding"], speech_ms=payload["speech_ms"],
             preset_speakers=preset_speakers,
         )
         await websocket.send(serialize_stt(

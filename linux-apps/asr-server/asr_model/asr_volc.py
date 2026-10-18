@@ -194,37 +194,6 @@ def _logid_from_ws(ws: Any) -> str:
     return headers.get("X-Tt-Logid") or headers.get("x-tt-logid") or ""
 
 
-async def _recognize(pcm: bytes, corpus: dict | None = None) -> dict:
-    chunks = [pcm[i:i + _BYTES_PER_CHUNK] for i in range(0, len(pcm), _BYTES_PER_CHUNK)] or [b""]
-    headers = {
-        "X-Api-App-Key": VOLC_APP_ID,
-        "X-Api-Access-Key": VOLC_ACCESS_TOKEN,
-        "X-Api-Resource-Id": VOLC_RESOURCE_ID,
-        "X-Api-Connect-Id": str(uuid.uuid4()),
-    }
-    params = _build_params(corpus)
-
-    async with websockets.connect(WS_URL, additional_headers=headers, max_size=None) as ws:
-        logger.info("[volc] connected logid=%s", _logid_from_ws(ws))
-        seq = 1
-        await ws.send(_make_full_client_request(seq, params))
-        for i, chunk in enumerate(chunks):
-            seq += 1
-            await ws.send(_make_audio_request(seq, chunk, is_last=(i == len(chunks) - 1)))
-
-        final: dict = {}
-        async for msg in ws:
-            r = _parse_response(msg)
-            if r["message_type"] == SERVER_ERROR_RESPONSE:
-                raise RuntimeError(f"火山 ASR 服务端错误 code={r.get('code')}: {r.get('payload_msg')}")
-            pm = r.get("payload_msg") or {}
-            if pm:
-                final.update(pm)
-            if r["is_last_package"]:
-                break
-        return final
-
-
 class VolcAsrWorker:
     """火山 ASR worker，支持 VAD 驱动的实时流式上传。"""
 
@@ -249,7 +218,6 @@ class VolcAsrWorker:
         self._completed_texts: list[str] = []
         self._last_speaker_id = ""
         self._last_elapsed = 0.0
-        self._streaming_turn_started = False
         self._generation = 0
 
     @property
@@ -288,7 +256,6 @@ class VolcAsrWorker:
         self._completed_texts = []
         self._last_speaker_id = ""
         self._last_elapsed = 0.0
-        self._streaming_turn_started = False
         self._pending_pcm.clear()
 
         ws = self._ws
@@ -330,7 +297,6 @@ class VolcAsrWorker:
         self._ws = ws
         self._seq = 1
         self._pending_pcm.clear()
-        self._streaming_turn_started = True
         logger.info("[volc] connected logid=%s", _logid_from_ws(ws))
 
         try:
@@ -444,20 +410,11 @@ class VolcAsrWorker:
             self._last_speaker_id = speaker_id
 
     async def generate_text(self, chunks: list[np.ndarray]) -> tuple[str, float, str]:
-        """结束实时会话并返回本轮累计文本与 speaker_id；无会话时兼容原批量调用。"""
+        """结束 start_stream 建立的实时会话，返回本轮累计文本与 speaker_id。"""
         self._check_credentials()
         if self.is_streaming:
             t0 = time.perf_counter()
             final = await self._finish_stream()
             self._append_result(final)
             self._last_elapsed = time.perf_counter() - t0
-        elif not self._streaming_turn_started:
-            t0 = time.perf_counter()
-            full_wav = np.concatenate(chunks)
-            pcm = self._chunk_to_pcm(full_wav)
-            final = await asyncio.wait_for(_recognize(pcm, self._corpus()), timeout=_TIMEOUT_S)
-            text = (final.get("result") or {}).get("text") or ""
-            speaker_id = self._extract_speaker_id(final)
-            return text, time.perf_counter() - t0, speaker_id
-
         return "".join(self._completed_texts), self._last_elapsed, self._last_speaker_id

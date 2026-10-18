@@ -33,16 +33,49 @@ class ChatMessage(Base):
     )
     position: Mapped[int] = mapped_column(primary_key=True)
     role: Mapped[str | None] = mapped_column(Text)
+    speaker: Mapped[str | None] = mapped_column(Text)
+    # 保留发送时间的原始文本及 UTC 偏移；缺少时间时为 SQL NULL。
+    time: Mapped[str | None] = mapped_column(Text)
     content: Mapped[str | None] = mapped_column(Text)
     usage: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     session: Mapped[ChatSession] = relationship(back_populates="messages")
 
 
-def _serialize_content(content) -> str | None:
-    """字符串和空内容原样保存，结构化内容只序列化 content 自身。"""
+def _content_object(content) -> dict:
+    """读取 content 中的 JSON 对象，纯文本及其他结构返回空对象。"""
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except ValueError:
+            return {}
+    return content if isinstance(content, dict) else {}
+
+
+def _serialize_content(content, *, role: str | None = None) -> str | None:
+    """用户消息提取 text；其他正文保留原值，结构化内容序列化为 JSON。"""
+    if role == "user":
+        text = _content_object(content).get("text")
+        if isinstance(text, str):
+            return text
     if content is None or isinstance(content, str):
         return content
     return json.dumps(content, ensure_ascii=False, default=str)
+
+
+def _message_metadata(message) -> dict[str, str | None]:
+    """优先取消息的时间和说话人，缺失时从 content JSON 对象提取，不改写正文。"""
+    content = _content_object(message.get("content"))
+    metadata = {}
+    for field in ("time", "speaker"):
+        metadata[field] = None
+        for source in (message, content):
+            value = source.get(field)
+            if field == "time" and isinstance(value, datetime.datetime):
+                value = value.isoformat()
+            if isinstance(value, str) and value:
+                metadata[field] = value
+                break
+    return metadata
 
 
 def save_debug_log(path: str, messages: list[dict]) -> None:
@@ -70,18 +103,6 @@ def _read_database(path: str):
         engine.dispose()
 
 
-def _preview(content: str | None) -> str:
-    if not content:
-        return ""
-    try:
-        payload = json.loads(content)
-        if isinstance(payload, dict) and isinstance(payload.get("text"), str):
-            content = payload["text"]
-    except (TypeError, ValueError):
-        pass
-    return content[:160]
-
-
 def query_sessions(path: str, *, query: str = "", limit: int = 20, offset: int = 0) -> dict:
     """按会话 ID 或任意消息内容搜索，返回最近开始的会话摘要。"""
     result = {"sessions": [], "total": 0, "limit": limit, "offset": offset}
@@ -107,7 +128,7 @@ def query_sessions(path: str, *, query: str = "", limit: int = 20, offset: int =
             .where(*filters).order_by(ChatSession.started_at.desc(), ChatSession.id.desc())
             .limit(limit).offset(offset)
         ).mappings()
-        result["sessions"] = [{**row, "preview": _preview(row["preview"])} for row in rows]
+        result["sessions"] = [{**row, "preview": (row["preview"] or "")[:160]} for row in rows]
     return result
 
 
@@ -120,7 +141,7 @@ def get_session(path: str, session_id: str) -> dict | None:
         return {
             "id": record.id, "started_at": record.started_at, "ended_at": record.ended_at,
             "messages": [
-                {"position": message.position, "role": message.role,
+                {"position": message.position, "role": message.role, "speaker": message.speaker, "time": message.time,
                  "content": message.content, "usage": message.usage}
                 for message in record.messages
             ],
@@ -146,7 +167,8 @@ def save_session(
             ChatMessage(
                 position=position,
                 role=message.get("role"),
-                content=_serialize_content(message.get("content")),
+                **_message_metadata(message),
+                content=_serialize_content(message.get("content"), role=message.get("role")),
                 usage=message.get("usage"),
             )
             for position, message in enumerate(messages)

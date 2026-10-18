@@ -76,8 +76,8 @@ ASR_SERVER_WS_URL=ws://127.0.0.1:8086/ws
 | `sense_voice` | `iic/SenseVoiceSmall-onnx` | int8 ONNX，onnxruntime CPU 推理；没有 NPU 的机器上用这个 |
 | `volc` | 火山流式 ASR | 需要 `.env` 里的凭据，走网络 |
 
-`sense_voice_onnx` 是 `sense_voice` 的别名。PyTorch fp32 的 `iic/SenseVoiceSmall`
-后端已经删除：936 MB 权重、加载峰值 3 GB，4 GB 的部署板子会被 OOM killer 杀掉。
+PyTorch fp32 的 `iic/SenseVoiceSmall` 后端已经删除：936 MB 权重、加载峰值 3 GB，
+4 GB 的部署板子会被 OOM killer 杀掉。
 
 前端特征沿用 funasr 的 `WavFrontend`，与原 PyTorch 路径一致；解码是 CTC 贪心 +
 `tokens.json` 反查，没有引入 `funasr-onnx`（那个包把 numpy 钉在 1.26.4，还要拖

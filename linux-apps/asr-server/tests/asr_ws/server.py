@@ -66,7 +66,7 @@ async def handle_connection(ws) -> None:
     @asr_client.on("stt")
     async def handle_stt(payload):
         speaker_name, score = asr_client.speaker.get_speaker_name(
-            payload["embedding"], speech_ms=payload.get("speech_ms")
+            payload["embedding"], speech_ms=payload["speech_ms"]
         )
 
         logger.info("speaker=%s score=%s content=%s", speaker_name, score, payload["content"])
@@ -87,7 +87,7 @@ async def handle_connection(ws) -> None:
         async for message in ws:
             if isinstance(message, (bytes, bytearray)):
                 chunk = np.frombuffer(message, dtype=np.float32).copy()
-                asr_client.audio_queue.put_nowait(chunk)
+                asr_client.enqueue_audio_chunk(chunk)
     except websockets.ConnectionClosed:
         pass
     finally:
