@@ -20,6 +20,7 @@ config.py             # 后端选择与模型路径（读 .env）
 vad.py                # FSMN VAD（PyTorch，跑 CPU）
 speaker.py            # 说话人匹配（centroid）+ 后端分流
 speaker_rknn.py       # 声纹 NPU 后端
+voiceprint_store.py   # asr_wsv2 调试页的具名声纹存储
 event_emitter.py      # 极简异步事件总线
 asr_model/            # sense_voice（int8 ONNX / RKNN NPU）、volc 三种识别后端
 utils/                # 批处理、设备探测、模型缓存路径
@@ -160,8 +161,16 @@ modprobe，因此改用直接操作 sysfs 的
 uv run python -m unittest discover -s tests
 ```
 
+包含调试页声纹存储、embedding 接口及使用模拟 ASR 的本地 WebSocket 集成测试，需要允许绑定回环端口；
+不会加载真实语音模型或打开麦克风。
+
 `tests/asr_ws/` 是浏览器调试页：`uv run python tests/asr_ws/server.py` 后打开
 `http://<板子IP>:8086/`，对着麦克风说话就能看到识别结果和说话人编号。
+
+[`tests/asr_wsv2/`](tests/asr_wsv2/) 自动采集运行服务的机器上的麦克风：Mac 使用本机输入设备，
+Linux 使用板载 `arecord`。运行 `uv run tests/asr_wsv2/server.py` 后打开
+`http://localhost:8088/` 查看结果，页面不采集音频。
+在消息旁点击「添加录入」可将这条语音的声纹保存为指定姓名，重启后继续用于匹配。
 
 `audio_logs/`、`rknn_models/` 等本地录音与模型产物已在 `.gitignore` 中排除。
 
@@ -192,7 +201,7 @@ worker 调用 `set_hotwords(...)`，新热词在下一段语音建连时生效�
 ws://<host>:8086/ws
 ```
 
-上行消息必须是二进制帧，内容为裸 PCM：
+音频上行使用二进制帧，内容为裸 PCM：
 
 - `16000 Hz`
 - 单声道
@@ -210,6 +219,7 @@ ws://<host>:8086/ws
 {
   "type": "stt",
   "speaker_id": "",
+  "speaker": "speaker_1",
   "content": "你好",
   "audio_url": "/audio/20260723_210943_%E4%BD%A0%E5%A5%BD.wav",
   "elapsed": 0.21,
@@ -224,15 +234,61 @@ ws://<host>:8086/ws
 | --- | --- | --- |
 | `type` | string | 消息类型，识别结果固定为 `stt`。 |
 | `speaker_id` | string | ASR 模型返回的说话人 ID；模型不提供时为空字符串。 |
+| `speaker` | string | 声纹匹配得到的匿名说话人编号，如 `speaker_1`、`speaker_2`；有效语音不足 1500 ms 时为 `unknown`。 |
 | `content` | string | 本次语音识别得到的文本。 |
 | `audio_url` | string \| null | 本段 WAV 录音的 HTTP 相对地址；录音不在配置目录内时为 `null`。 |
 | `elapsed` | number | ASR 推理耗时，单位为秒。 |
 | `embedding` | number[] | 说话人声纹向量，可用于说话人匹配或聚类。 |
 | `speech_ms` | number | VAD 检测到的有效语音时长，单位为毫秒。 |
 
-除本地 `audio_path` 被转换为 `audio_url` 外，其余字段与 `AsrClient` 的 `stt`
+主服务在每次 STT 回包前调用 `SpeakerWorker.get_speaker_name()`，同一连接内相似声纹
+沿用编号，新声纹分配新编号。编号和临时样本仅保存在该连接的内存中，重新连接后从
+`speaker_1` 开始；不保存真实姓名或具名声纹库。SDK 与 harness 原样使用返回的 `speaker`，
+harness 不再进行二次声纹匹配。
+独立 `/embedding` 接口仍只返回向量，不分配编号。
+
+除新增 `speaker`、本地 `audio_path` 被转换为 `audio_url` 外，其余字段与 `AsrClient` 的 `stt`
 事件一致；NumPy 数组会转换为 JSON 数组。协议或音频格式错误会返回
 `{"type":"error", ...}`，不会作为音频送入识别器。
+
+## 声纹 embedding 接口
+
+运行 `uv run server.py` 后，连接 `ws://<host>:8086/embedding`。
+一个二进制消息发送一段完整音频，服务端只返回该段的声纹向量：
+
+```json
+{"embedding":[0.1,-0.2]}
+```
+
+输入为 **16 kHz、单声道、Float32 little-endian 裸 PCM**，不含 WAV 头，
+样本范围 `[-1, 1]`。每段至少 1.5 秒，建议 2～3 秒；超过 3 秒时只使用开头
+3 秒，与 `AsrClient` 的声纹输入窗口一致。不要把一段音频拆成多条消息上传。
+连接可复用，每条完整音频对应一条 JSON 响应。
+
+客户端自行保存姓名和 embedding，并完成匹配。该接口不保存音频、姓名或声纹资料，
+只加载声纹模型，不启动 VAD / ASR。原有 `/ws` 返回的 `stt.embedding` 也可以直接使用。
+
+例如已有一段 `speaker.f32` 音频时：
+
+```python
+import asyncio
+import json
+import numpy as np
+import websockets
+
+async def main():
+    audio = np.fromfile("speaker.f32", dtype="<f4")
+    async with websockets.connect("ws://localhost:8086/embedding") as ws:
+        await ws.send(audio.tobytes())
+        result = json.loads(await ws.recv())
+        print(result["embedding"])
+
+asyncio.run(main())
+```
+
+格式或提取失败时返回 `{"type":"error","code":"...","message":"..."}`，
+不会关闭连接，可修正音频后重试。`audio_too_short` 表示不足 1.5 秒，
+`embedding_failed` 表示模型加载、推理或输出验证失败；其他音频格式校验与 `/ws` 一致。
 
 ## 录音 HTTP 接口
 

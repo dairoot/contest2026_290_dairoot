@@ -29,6 +29,7 @@ tests/asr_wsv3/key.pem
 speaker_model_weights/*
 
 audio_logs/*
+speaker_profiles/
 sample_logs/*
 sample_logs_denoised/*
 # 从 sample_logs 抽出来的声纹 embedding，与原始录音同源，跟着一起排除；

@@ -1,7 +1,7 @@
 """带 web 配置台的语音对话 demo（在 tests/test_run_v2.py 基础上加了 web 配置和查看）。
 
 音频照旧走本机：麦克风 sd.InputStream → ChatBot，TTS 音频 → sd.OutputStream；
-web 页面只做两件事：改配置（保存后按新配置重建 ChatBot 生效）和查看 llm.messages。
+web 页面提供配置、聊天记录和声纹录入；声纹保存在 harness 本机数据库。
 
 启动：python examples/web/main.py，然后打开 http://127.0.0.1:8080
 """
@@ -38,7 +38,8 @@ from server import serve
 from session_store import get_session, query_sessions, save_debug_log, save_session
 from skill_install import MAX_OUTPUT_CHARS, install_skill, run_skill_command
 
-from aichat_sdk import ChatBot, DEFAULT_TTS_ENGINE, get_tts_engines
+from aichat_sdk import DEFAULT_TTS_ENGINE, get_tts_engines
+from voiceprint import VoiceprintChatBot as ChatBot, VoiceprintClient
 from aichat_sdk import config as sdk_config
 from aichat_sdk.config import DEFAULT_AGENT_SOUL
 from aichat_sdk.llm import mcp as sdk_mcp
@@ -366,6 +367,7 @@ def validate_config(raw: dict) -> dict:
 class AIClient:
     def __init__(self, config: dict):
         self.config = config
+        self.voiceprints = VoiceprintClient(SESSION_DB_PATH)
         self.chat_bot: ChatBot | None = None
         self.skills: list[dict] = []
         self.last_error = ""
@@ -410,6 +412,7 @@ class AIClient:
             "error": self.last_error,
             "compression": self.compression_status(),
             "skill_install": dict(self.skill_install_state),
+            "voiceprints": self.voiceprints.status(),
         }
 
     def status(self) -> dict:
@@ -619,6 +622,7 @@ class AIClient:
         register_default_tools_server(disabled_tools=sorted(disabled_aichat_tools(config)))
         try:
             chat_bot = ChatBot(
+                voiceprints=self.voiceprints,
                 tts_engine=config["tts_engine"],
                 output_sample_rate=OUTPUT_SAMPLE_RATE,
                 send_idle_farewell=config["send_idle_farewell"],
