@@ -1,4 +1,4 @@
-"""通过 SQLAlchemy ORM 将非 system 聊天记录保存到 SQLite。"""
+"""通过 SQLAlchemy ORM 保存聊天记录，并提供完整消息的 JSONL 调试快照。"""
 
 from contextlib import closing
 import datetime
@@ -43,6 +43,14 @@ def _serialize_content(content) -> str | None:
     if content is None or isinstance(content, str):
         return content
     return json.dumps(content, ensure_ascii=False, default=str)
+
+
+def save_debug_log(path: str, messages: list[dict]) -> None:
+    """一行一条保存完整原始消息，包括 system 和工具调用等字段。"""
+    content = "".join(json.dumps(message, ensure_ascii=False, default=str) + "\n" for message in messages)
+    log_path = Path(path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(content, encoding="utf-8")
 
 
 def save_session(
