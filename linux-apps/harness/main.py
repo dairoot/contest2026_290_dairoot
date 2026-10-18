@@ -35,10 +35,11 @@ sys.path.insert(0, BASE_DIR)  # server.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(BASE_DIR)))  # aichat_sdk
 
 from server import serve
-from session_store import save_debug_log, save_session
+from session_store import get_session, query_sessions, save_debug_log, save_session
 from skill_install import MAX_OUTPUT_CHARS, install_skill, run_skill_command
 
 from aichat_sdk import ChatBot, DEFAULT_TTS_ENGINE, get_tts_engines
+from aichat_sdk import config as sdk_config
 from aichat_sdk.config import DEFAULT_AGENT_SOUL
 from aichat_sdk.llm import mcp as sdk_mcp
 from aichat_sdk.llm.mcp import (
@@ -90,6 +91,48 @@ DEFAULT_CONFIG = {
         }
     },
 }
+
+
+def _tts_requirements(engine: str) -> tuple[str, tuple[str, ...]]:
+    engine = engine.strip().lower()
+    for item in get_tts_engines():
+        if engine == item["name"] or engine in item["aliases"]:
+            engine = item["name"]
+            break
+    bytedance = ("BYTEDANCE_TTS_APP_ID", "BYTEDANCE_TTS_APP_KEY")
+    return {
+        "bytedancev1": ("豆包 v1", bytedance),
+        "bytedancev2": ("豆包 v2", bytedance),
+        "mimo": ("小米 MiMo", ("MIMO_API_KEY",)),
+        "edge": ("微软 Edge", ()),
+    }.get(engine, (engine, ()))
+
+
+def tts_configuration_error(engine: str) -> str:
+    """检查 SDK 实际加载的配置，只列缺失项，不输出凭据值。"""
+    label, required = _tts_requirements(engine)
+    missing = [name for name in required if not str(getattr(sdk_config, name, "") or "").strip()]
+    if missing:
+        return f"TTS（{label}）尚未配置：请在 .env 中填写 {'、'.join(missing)}，然后重启服务。"
+    return ""
+
+
+def startup_error(error: BaseException, tts_engine: str) -> str:
+    """SDK 将连接异常转成 SystemExit；从原异常的来源判断失败组件。"""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        traceback = error.__traceback__
+        while traceback is not None:
+            module = traceback.tb_frame.f_globals.get("__name__", "")
+            if module.startswith("aichat_sdk.asr."):
+                return "语音识别（ASR）服务连接失败，请检查 ASR 服务是否启动及 ASR_SERVER_WS_URL 配置。"
+            if module.startswith("aichat_sdk.tts."):
+                label, _ = _tts_requirements(tts_engine)
+                return f"TTS（{label}）连接失败，请检查该引擎的凭据和网络连接，具体原因见服务日志。"
+            traceback = traceback.tb_next
+        error = error.__cause__ or error.__context__
+    return "对话服务初始化失败，请查看服务日志中的具体原因。"
 
 
 async def set_default_volume() -> None:
@@ -350,6 +393,12 @@ class AIClient:
         """给页面的配置：附 SDK 引擎目录和当前麦克风列表。"""
         return {**self.config, "tts_engines": get_tts_engines(), "mics": input_devices()}
 
+    def query_sessions(self, *, query: str = "", limit: int = 20, offset: int = 0) -> dict:
+        return query_sessions(SESSION_DB_PATH, query=query, limit=limit, offset=offset)
+
+    def get_session(self, session_id: str) -> dict | None:
+        return get_session(SESSION_DB_PATH, session_id)
+
     def live_status(self) -> dict:
         """会话跑着自己就会变的那几项，走 SSE 推给页面。"""
         return {
@@ -546,7 +595,10 @@ class AIClient:
                     self._sync_mcp_registry(config)  # 必须在 self.config 被换掉之前，要拿旧配置做差异
                     self.config = config
                 await self._start_bot()
-                self._open_input_stream()  # 放在 _start_bot 之后：它开头会清空 last_error，反过来麦克风的报错就没了
+                if self.chat_bot is not None:
+                    self._open_input_stream()
+                else:
+                    self._close_input_stream()  # 启动失败时保留具体原因，不再用麦克风报错覆盖它。
             finally:
                 self.is_restarting = False
 
@@ -554,8 +606,11 @@ class AIClient:
 
     async def _start_bot(self) -> None:
         """起不来就把原因记进 last_error（chat_bot 保持 None），页面还能接着改配置重试。"""
-        self.last_error = ""
         config = self.config
+        self.last_error = tts_configuration_error(config["tts_engine"])
+        if self.last_error:
+            logger.error(self.last_error)
+            return
         # 技能是建 LlmAgent 时扫 SKILLS_DIR 烘进系统提示词的，这里同步扫一份给页面渲染开关；
         # 停用的不传给 AgentInfo.skills，模型就看不到它
         self.skills = load_skills()
@@ -576,8 +631,8 @@ class AIClient:
                 ),
             )
             await chat_bot.initialize()
-        except SystemExit:  # initialize() 里 ASR/TTS 连不上会直接 exit(1)，web 端不能跟着退出
-            self.last_error = "ASR / TTS 连接失败，检查 asr_server 是否启动、.env 是否配好"
+        except SystemExit as exc:  # SDK 的 exit(1) 不应退出配置台，也不应丢掉失败组件。
+            self.last_error = startup_error(exc, config["tts_engine"])
             logger.error(self.last_error)
             return
         except Exception as e:
