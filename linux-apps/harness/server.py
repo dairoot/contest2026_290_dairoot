@@ -10,12 +10,15 @@
 - POST /api/skills/command  执行技能安装命令，输出通过 SSE 推送
 - GET  /api/state    完整状态 + llm.messages（页面加载、保存配置、重启后各取一次）
 - GET  /api/events   SSE：把会变的那部分状态和 llm.messages 推给页面，代替轮询
+- GET  /api/sessions?q=...&limit=20&offset=0  从数据库搜索历史会话并分页
+- GET  /api/sessions/{session_id}  从数据库读取会话消息
 - GET  /audio/...    转发到 ASR 服务上的用户录音（见 get_audio）
 """
 
 import asyncio
 import contextlib
 import json
+import logging
 import os
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -25,12 +28,14 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
+from sqlalchemy.exc import SQLAlchemyError
 
 from aichat_sdk.config import ASR_SERVER_WS_URL
 from skill_install import MAX_UPLOAD_BYTES
 
 INDEX_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
 EVENT_INTERVAL = 0.5  # 秒；SSE 每隔这么久看一眼状态变没变
+logger = logging.getLogger("web_console")
 
 # ASR 服务的 http 根，跟 AsrWebSocketClient 一样按 ws 地址推出来
 _ASR = urlsplit(ASR_SERVER_WS_URL)
@@ -100,6 +105,34 @@ def create_app(client) -> Starlette:
     async def get_state(request: Request):
         return JSONResponse({"status": client.status(), "messages": client.messages()})
 
+    async def get_sessions(request: Request):
+        try:
+            limit = int(request.query_params.get("limit", "20"))
+            offset = int(request.query_params.get("offset", "0"))
+            query = request.query_params.get("q", "").strip()
+            if not 1 <= limit <= 100 or offset < 0:
+                raise ValueError("limit 需为 1～100，offset 不能小于 0")
+            if len(query) > 200:
+                raise ValueError("搜索词不能超过 200 个字符")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        try:
+            data = await asyncio.to_thread(client.query_sessions, query=query, limit=limit, offset=offset)
+        except (OSError, SQLAlchemyError, ValueError):
+            logger.exception("查询历史会话失败")
+            return JSONResponse({"ok": False, "error": "聊天记录暂时不可用，请稍后重试"}, status_code=503)
+        return JSONResponse({"ok": True, **data}, headers={"Cache-Control": "no-store"})
+
+    async def get_session(request: Request):
+        try:
+            record = await asyncio.to_thread(client.get_session, request.path_params["session_id"])
+        except (OSError, SQLAlchemyError, ValueError):
+            logger.exception("查询历史会话消息失败")
+            return JSONResponse({"ok": False, "error": "聊天记录暂时不可用，请稍后重试"}, status_code=503)
+        if record is None:
+            return JSONResponse({"ok": False, "error": "会话不存在"}, status_code=404)
+        return JSONResponse({"ok": True, "session": record}, headers={"Cache-Control": "no-store"})
+
     async def get_events(request: Request):
         """状态和新消息的 SSE 流：ChatBot 没有变更回调，服务端自己看着，变了才发一帧。
 
@@ -155,6 +188,8 @@ def create_app(client) -> Starlette:
             Route("/api/skills/command", post_skill_command, methods=["POST"]),
             Route("/api/state", get_state),
             Route("/api/events", get_events),
+            Route("/api/sessions", get_sessions),
+            Route("/api/sessions/{session_id}", get_session),
             Route("/audio/{path:path}", get_audio),
         ]
     )

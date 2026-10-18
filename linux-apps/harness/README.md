@@ -27,6 +27,11 @@ TTS 引擎选项从 SDK 的 `get_tts_engines()` 动态加载，要求 `aichat-sd
 MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mimo_default`）
 和 `MIMO_TTS_INSTRUCTIONS`。
 
+启动前会检查所选 TTS 引擎的必填项。豆包 v1/v2 缺少 `BYTEDANCE_TTS_APP_ID` 或
+`BYTEDANCE_TTS_APP_KEY`、MiMo 缺少 `MIMO_API_KEY` 时，页面会明确提示 TTS 未配置及缺失项，
+填写 `.env` 后需重启服务；Edge 无需这些凭据。连接失败时分别提示 ASR 或所选 TTS 引擎，
+不再把所有初始化失败统一显示为“ASR / TTS 连接失败”。
+
 旧页面保存的 `bytedance`、`v3` 启动时分别迁移为 `bytedancev1`、`bytedancev2`，
 保存后写回 `config.json`。若曾手动填写 SDK 0.1.0 的 `v2` / `bytedancev2`，
 升级后需改选 `bytedancev1` 才能保持原引擎；SDK 0.1.1 的 `v2` 现在指豆包 v2。
@@ -75,10 +80,26 @@ sqlite3 data/history.sqlite3 "SELECT content, usage FROM messages WHERE session_
 收到结束事件时保存失败的，会在后续重启或退出时重试已启用且尚未成功的存储。
 强制杀进程或断电前尚未结束的会话不会补存。
 
+配置台聊天区点击“历史会话”，可分页查看已保存的会话，按消息内容或会话 ID 搜索，
+并打开会话查看按顺序保存的消息、开始/结束时间和 token 用量。
+搜索包含用户、助手和工具消息；留空并点击“查询”即可刷新全部会话。
+时间以浏览器本地时区显示，列表按开始时间从新到旧排列，每页 20 个会话。
+查询直接读取 `data/history.sqlite3`，不依赖 `DEBUG` 或 JSONL 文件，也不打断当前对话。
+尚未结束、尚未保存的会话仍在实时聊天区查看。
+
+历史查询接口：
+
+- `GET /api/sessions?q=关键词&limit=20&offset=0`：返回 `sessions` 摘要列表、`total`、`limit` 和 `offset`。
+  `q` 同时匹配会话 ID 和任意消息内容，最长 200 字符；`limit` 为 1～100，`offset` 为非负整数。
+- `GET /api/sessions/{session_id}`：返回 `session` 及按 `position` 排序的 `messages`，
+  每条消息包含 `position`、`role`、`content`、`usage`。会话不存在时返回 404。
+
+数据库尚不存在时返回空列表，不创建文件；数据库不可读时返回 503，详细原因记录在服务日志。
+
 存储与会话生命周期测试（使用临时数据库和模拟 ChatBot，不访问音频设备或外部服务）：
 
 ```bash
-uv run python -m unittest -v tests.test_session_store
+uv run python -m unittest -v tests.test_session_store tests.test_session_query
 ```
 
 ## Skills 安装
