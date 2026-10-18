@@ -15,11 +15,13 @@ import shlex
 import shutil
 import sys
 import urllib.request
+import uuid
 import zoneinfo
 
 import numpy as np
 import sounddevice as sd
 from dotenv import load_dotenv
+from sqlalchemy.exc import SQLAlchemyError
 
 load_dotenv(override=True)
 
@@ -33,6 +35,7 @@ sys.path.insert(0, BASE_DIR)  # server.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(BASE_DIR)))  # aichat_sdk
 
 from server import serve
+from session_store import save_session
 from skill_install import MAX_OUTPUT_CHARS, install_skill, run_skill_command
 
 from aichat_sdk import ChatBot, DEFAULT_TTS_ENGINE, get_tts_engines
@@ -55,7 +58,7 @@ sdk_mcp.MCP_TOOL_TIMEOUT_SECONDS = 20
 logger = logging.getLogger("web_console")
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-SESSIONS_DIR = os.path.join(BASE_DIR, "sessions")  # 每轮会话结束后把完整 llm.messages 存一个 json
+SESSION_DB_PATH = os.path.join(BASE_DIR, "sessions", "history.sqlite3")
 WEB_HOST = "0.0.0.0"  # 注意：页面能改外部 MCP server 的启动命令（等于能在本机拉进程），绑 0.0.0.0 后同网段都能访问
 WEB_PORT = 8080
 OUTPUT_SAMPLE_RATE = 24000  # 采样率不放到页面上配，扬声器流建一次就一直用
@@ -328,6 +331,8 @@ class AIClient:
         self.installing = ""  # 正在 pip install 依赖的 server 名，页面按钮显示「安装中」并防连点
         self.mic_device = ""  # 实际拾音的输入设备名（配的设备没了就是回退到的那个），页面挂个 badge 显示
         self._session_started_at: datetime.datetime | None = None
+        self._session_ended_at: datetime.datetime | None = None
+        self._session_id = uuid.uuid4().hex
         self._messages_saved = False
         self._play_task: asyncio.Task | None = None
         self._text_tasks: set[asyncio.Task] = set()
@@ -581,37 +586,39 @@ class AIClient:
         self.chat_bot = chat_bot
         self.is_session_closed = False
         self.is_playing = False
-        self._session_started_at = datetime.datetime.now()
+        self._session_started_at = datetime.datetime.now(datetime.timezone.utc)
+        self._session_ended_at = None
+        self._session_id = uuid.uuid4().hex
         self._messages_saved = False
         self._play_task = asyncio.create_task(self.play_audio(chat_bot))
 
     def save_messages(self, chat_bot: ChatBot | None = None) -> str:
-        """把这一轮会话完整的 llm.messages 落到 sessions/ 下的一个 jsonl 文件（一行一条），返回文件路径。
+        """把这一轮非 system 消息存入 SQLite，返回会话 ID；未写入则返回空串。
 
         会话结束（收到 close）时存一次；没等到 close 就被重启/退出打断的，
-        由 _stop_bot 补存，_messages_saved 保证同一轮只写一个文件。
+        由 _stop_bot 补存，_messages_saved 保证同一轮只写一次。
         """
         chat_bot = chat_bot or self.chat_bot
         if chat_bot is None or self._messages_saved:
             return ""
         messages = chat_bot.llm.messages
-        if len(messages) <= 1:  # 只有 system prompt，等于没聊，不留空文件
+        message_count = sum(message.get("role") != "system" for message in messages)
+        if not message_count:
             self._messages_saved = True
             return ""
 
-        started_at = self._session_started_at or datetime.datetime.now()
-        os.makedirs(SESSIONS_DIR, exist_ok=True)
-        path = os.path.join(SESSIONS_DIR, f"{started_at:%Y%m%d-%H%M%S}.jsonl")
+        if self._session_ended_at is None:
+            self._session_ended_at = datetime.datetime.now(datetime.timezone.utc)
+        started_at = self._session_started_at or self._session_ended_at
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                for message in messages:
-                    f.write(json.dumps(message, ensure_ascii=False, default=str) + "\n")
-        except OSError:  # 存记录失败不该影响会话本身
+            save_session(SESSION_DB_PATH, self._session_id, started_at, self._session_ended_at, messages)
+        except (OSError, SQLAlchemyError, TypeError, ValueError):  # 存记录失败不该影响会话本身
             logger.exception("保存会话记录失败")
             return ""
         self._messages_saved = True
-        logger.info("[session] 会话记录已保存：%s（%d 条 message）", path, len(messages))
-        return path
+        logger.info("[session] 会话记录已保存：%s，id=%s（%d 条 message）",
+                    SESSION_DB_PATH, self._session_id, message_count)
+        return self._session_id
 
     def _sync_mcp_registry(self, new_config: dict) -> None:
         """只注销删掉的和改过的 server（stdio 子进程随之退出）。
@@ -636,12 +643,15 @@ class AIClient:
         if self._text_tasks:
             await asyncio.gather(*self._text_tasks, return_exceptions=True)
         self._text_tasks.clear()
-        self.save_messages(chat_bot)  # 没等到 close 就被重启/退出打断的，在这里补存
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         if chat_bot is not None:
-            await chat_bot.close()
+            try:
+                await chat_bot.close()
+            finally:
+                # 先停止 SDK 内仍在生成回复的任务，再保存最终消息。
+                self.save_messages(chat_bot)
 
     # ---------------- 音频 ----------------
 

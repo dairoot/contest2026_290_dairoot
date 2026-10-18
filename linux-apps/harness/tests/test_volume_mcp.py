@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastmcp import Client
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "mcp"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcp"))
 import volume_mcp
 
 

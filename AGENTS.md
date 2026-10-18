@@ -51,9 +51,9 @@
 
 | 改动范围 | 验证入口 |
 | --- | --- |
-| harness 技能安装 | 在 `linux-apps/harness/` 执行 `uv run python -m unittest -v test_skill_install` |
-| harness 音量 MCP | 在同目录执行 `uv run python -m unittest -v test_volume_mcp`，使用模拟音量设备 |
-| harness TTS 配置或状态事件 | 在同目录按需执行 `uv run python -m unittest -v test_tts_config test_state_events` |
+| harness 技能安装 | 在 `linux-apps/harness/` 执行 `uv run python -m unittest -v tests.test_skill_install` |
+| harness 音量 MCP | 在同目录执行 `uv run python -m unittest -v tests.test_volume_mcp`，使用模拟音量设备 |
+| harness TTS 配置或状态事件 | 在同目录按需执行 `uv run python -m unittest -v tests.test_tts_config tests.test_state_events` |
 | 视频排队与丢帧 | 在 `linux-apps/miloco-server/` 执行 `uv run python -m unittest -v test_video_pipeline`；需要 GStreamer，跳过不算通过 |
 | KWS 数值或模型 | 按 KWS Skill 构建同源 `kws_host` 并运行 `golden`，再按改动补流式评测和真机验证 |
 | ASR/VAD 或 YOLO 模型迁移 | 按对应 Skill 比较参考模型、转换模型和目标板结果，包含输入输出与实际延迟 |
