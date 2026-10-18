@@ -106,7 +106,7 @@ class SessionQueryTest(unittest.TestCase):
         self.assertEqual(record["ended_at"], (STARTED_AT + datetime.timedelta(minutes=2)).isoformat())
         self.assertEqual([message["position"] for message in record["messages"]], [0, 1, 2, 3])
         self.assertEqual([message["role"] for message in record["messages"]], ["user", "assistant", "tool", "assistant"])
-        self.assertEqual(json.loads(record["messages"][0]["content"]), {"text": "把客厅灯调暗", "round": 1})
+        self.assertEqual(record["messages"][0]["content"], "把客厅灯调暗")
         self.assertIsNone(record["messages"][1]["content"])
         self.assertIsNone(record["messages"][1]["usage"])
         self.assertEqual(record["messages"][-1]["usage"], {"total_tokens": 42})
@@ -125,6 +125,43 @@ class SessionQueryTest(unittest.TestCase):
         self.assertEqual(messages[1]["usage"], {})
         self.assertIsNone(messages[2]["role"])
         self.assertIsNone(messages[2]["content"])
+
+    def test_detail_returns_speaker_and_message_send_time_with_original_timezone(self):
+        sent_at = "2026-10-18T13:09:44.584297+08:00"
+        reply_at = "2026-10-18T13:09:45.123456+08:00"
+        content = json.dumps({"text": "你好", "time": sent_at, "speaker": "张三"}, ensure_ascii=False)
+        self.save("times", [
+            {"role": "user", "content": content},
+            {"role": "assistant", "content": "你好", "time": reply_at, "speaker": "助手"},
+            {"role": "tool", "content": None},
+        ])
+        response = self.web.get("/api/sessions/times")
+        self.assertEqual(response.status_code, 200)
+        messages = response.json()["session"]["messages"]
+        self.assertEqual([message["time"] for message in messages], [sent_at, reply_at, None])
+        self.assertEqual([message["speaker"] for message in messages], ["张三", "助手", None])
+        self.assertEqual(messages[0]["content"], "你好")
+
+    def test_search_matches_user_text_without_matching_content_metadata(self):
+        self.save("weather", [{"role": "user", "content": json.dumps({
+            "text": "查一下天气。", "time": "2026-10-18T18:43:21.916778+08:00",
+            "round": 1, "speaker": "unknown",
+        }, ensure_ascii=False)}])
+        result = self.web.get("/api/sessions", params={"q": "天气"}).json()
+        self.assertEqual(result["total"], 1)
+        self.assertEqual(result["sessions"][0]["preview"], "查一下天气。")
+        self.assertEqual(self.web.get("/api/sessions", params={"q": "unknown"}).json()["total"], 0)
+
+    def test_user_text_that_looks_like_json_is_not_parsed_again_in_history(self):
+        text = '{"text":"正文里的 JSON", "speaker":"字面值"}'
+        self.save("json-text", [{"role": "user", "content": json.dumps({
+            "text": text, "time": "2026-10-18T18:43:21.916778+08:00", "speaker": "张三",
+        }, ensure_ascii=False)}])
+        listing = self.web.get("/api/sessions").json()
+        self.assertEqual(listing["sessions"][0]["preview"], text)
+        message = self.web.get("/api/sessions/json-text").json()["session"]["messages"][0]
+        self.assertEqual(message["content"], text)
+        self.assertEqual(message["speaker"], "张三")
 
     def test_unknown_session_returns_404(self):
         self.seed()

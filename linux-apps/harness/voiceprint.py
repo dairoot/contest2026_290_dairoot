@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from sqlalchemy import JSON, Text, URL, create_engine, delete, inspect, select
+from sqlalchemy import JSON, Text, URL, create_engine, delete, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
@@ -57,8 +57,7 @@ class VoiceprintStore:
         profiles = {}
         try:
             with _read_database(self.path) as session:
-                # 兼容升级前只有聊天记录的数据库；读取不创建目录或表。
-                if session is not None and inspect(session.bind).has_table("voiceprints"):
+                if session is not None:
                     for record in session.scalars(select(Voiceprint)):
                         vectors = [normalize(value) for value in record.embeddings]
                         if not vectors or len({v.size for v in vectors}) != 1:

@@ -195,24 +195,7 @@ def load_config() -> dict:
             config.update(json.load(f))
     else:
         config.update(detect_location())
-    # SDK 0.1.1 重命名了豆包引擎；兼容旧页面保存的名称。
-    # v2 / bytedancev2 在新 SDK 中仍有效，不能按旧含义重写。
-    engine = str(config["tts_engine"]).strip().lower()
-    config["tts_engine"] = {
-        "bytedance": "bytedancev1", "v3": "bytedancev2", "bytedancev3": "bytedancev2",
-    }.get(engine, engine)
-    for key in ("aichat_tools", "skills"):  # 兼容手改坏的配置
-        if not isinstance(config.get(key), dict):
-            config[key] = {}
-    # 音量工具默认提供，也补到旧配置里；显式 enabled=false 的设置保留。
-    servers = config.setdefault("mcp", {}).setdefault("mcpServers", {})
-    servers.setdefault("音量", {"command": "python", "args": ["mcp/volume_mcp.py"]})
-    # 兼容搬目录前保存的配置；自定义 cwd 的外部脚本不改。
-    for spec in servers.values():
-        if isinstance(spec, dict) and not spec.get("cwd"):
-            if spec.get("args") in (["miloco_mcp.py"], ["volume_mcp.py"]):
-                spec["args"] = [f"mcp/{spec['args'][0]}"]
-    return config
+    return validate_config(config)
 
 
 def save_config(config: dict) -> None:
@@ -241,7 +224,7 @@ def disabled_aichat_tools(config: dict) -> set[str]:
 
 
 def normalize_mcp_servers(mcp: dict) -> dict:
-    """取出 {name: spec}（外层 mcpServers 可省略，兼容 Claude Desktop 写法），顺手逐个校验。"""
+    """接收 MCP 配置对象或 mcpServers 内部映射，并逐个校验服务配置。"""
     servers = mcp.get("mcpServers", mcp)
     if not isinstance(servers, dict):
         raise ValueError("mcpServers 要是 JSON 对象")
@@ -332,11 +315,11 @@ def validate_config(raw: dict) -> dict:
     except (TypeError, ValueError):
         raise ValueError("时区要填数字，比如 8")
 
-    tool_toggles = raw.get("aichat_tools") or {}
+    tool_toggles = raw.get("aichat_tools", {})
     if not isinstance(tool_toggles, dict):
         raise ValueError("aichat_tools 要是 JSON 对象（{工具名: 是否启用}）")
 
-    skill_toggles = raw.get("skills") or {}
+    skill_toggles = raw.get("skills", {})
     if not isinstance(skill_toggles, dict):
         raise ValueError("skills 要是 JSON 对象（{技能名: 是否启用}）")
 

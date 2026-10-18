@@ -177,7 +177,7 @@ async def handle_stt(asr_client, payload) -> None:
             speaker_name = "unknown"
         else:
             speaker_name, score = asr_client.speaker.get_speaker_name(
-                embedding, speech_ms=payload.get("speech_ms")
+                embedding, speech_ms=payload["speech_ms"]
             )
 
     logger.info("speaker=%s score=%s content=%s", speaker_name, score, payload["content"])
