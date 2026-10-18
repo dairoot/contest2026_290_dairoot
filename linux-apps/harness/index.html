@@ -468,7 +468,8 @@ details.thinking pre { color:var(--muted); }
 
 <dialog id="voiceprint-dialog" aria-labelledby="voiceprint-title">
   <h2><span id="voiceprint-title">声纹</span><button id="voiceprint-close" type="button" aria-label="关闭声纹">关闭</button></h2>
-  <p class="hint">选择聊天中的语音消息，点击“添加录入”保存声纹样本。同名录入可补充样本，说话人以 ASR 返回为准。</p>
+  <p class="hint">选择语音消息添加录入。同名录入可补充样本，样本会同步给 ASR 用于识别姓名。</p>
+  <p id="voiceprint-sync" class="note" role="status" aria-live="polite"></p>
   <form id="voiceprint-form" hidden>
     <p id="voiceprint-preview"></p>
     <label><span>姓名</span><input id="voiceprint-name" required maxlength="40" list="voiceprint-names" autocomplete="off" placeholder="输入姓名，或选择已有姓名"></label>
@@ -1321,6 +1322,12 @@ let voiceprintSaving = false;
 
 function renderVoiceprints() {
   const profiles = fullState.voiceprints?.profiles || [];
+  const sync = fullState.voiceprints?.sync || {};
+  const syncError = sync.error || fullState.voiceprints?.error || "";
+  $("#voiceprint-sync").textContent = syncError ? "已保存的声纹尚未同步：" + syncError
+    : !sync.connected ? "等待 ASR 连接后同步声纹"
+    : sync.pending ? "正在同步声纹到 ASR…" : "声纹已同步到 ASR，下次说话即可匹配姓名";
+  $("#voiceprint-sync").className = "note " + (syncError ? "err" : sync.connected && !sync.pending ? "ok" : "");
   $("#voiceprint-names").replaceChildren(...profiles.map((profile) => {
     const option = el("option");
     option.value = profile.name;
