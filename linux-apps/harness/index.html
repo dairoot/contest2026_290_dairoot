@@ -177,8 +177,9 @@ button:disabled { opacity:.5; cursor:default; }
 .banner.warn { color:var(--warn); border-color:var(--warn); }
 .banner.err { color:var(--err); border-color:var(--err); }
 #msg-count { color:var(--muted); font-weight:400; }
-#history-open { margin-left:auto; }
-#history-open, #restart { padding:4px 10px; font-size:12px; }
+#voiceprint-open { margin-left:auto; }
+#voiceprint-open, #history-open, #restart { padding:4px 10px; font-size:12px; }
+.chat > h2 { flex-wrap:wrap; }
 #messages { flex:1; overflow-y:auto; padding-right:4px; }
 .msg { border-left:3px solid var(--line); padding:2px 0 8px 10px; margin-bottom:12px; }
 .msg.user { border-color:var(--accent); }
@@ -190,6 +191,14 @@ button:disabled { opacity:.5; cursor:default; }
 .msg.assistant .role { color:var(--ok); }
 .msg.tool .role { color:var(--warn); }
 .msg .meta { font-size:12px; color:var(--muted); }
+.msg .enroll { margin-left:auto; padding:1px 7px; font-size:11px; flex:none; }
+#voiceprint-dialog { width:min(460px, calc(100vw - 32px)); max-height:85dvh; padding:22px; border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--fg); }
+#voiceprint-dialog::backdrop { background:#10182866; }
+#voiceprint-close { margin-left:auto; }
+#voiceprint-preview { font-size:13px; margin:0 0 14px; white-space:pre-wrap; overflow-wrap:anywhere; }
+#voiceprint-note { min-height:1.6em; margin:10px 0; }
+.voiceprint-profile { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:13px; }
+.voiceprint-profile button { margin-left:auto; padding:2px 8px; font-size:12px; }
 .body { white-space:pre-wrap; word-break:break-word; margin-top:2px; }
 .voice {  /* 用户这句话的录音：文字前面的小胶囊，点了播/暂停，背景从左往右填充当进度 */
   display:inline-flex; align-items:center; gap:5px; vertical-align:middle; margin-right:8px;
@@ -446,7 +455,7 @@ details.thinking pre { color:var(--muted); }
   </section>
 
   <section class="card chat">
-    <h2>聊天信息 <span id="msg-count"></span><button id="history-open" type="button">历史会话</button><button id="restart">重新开始</button></h2>
+    <h2>聊天信息 <span id="msg-count"></span><button id="voiceprint-open" type="button">声纹</button><button id="history-open" type="button">历史会话</button><button id="restart">重新开始</button></h2>
     <div id="banner" class="banner" hidden></div>
     <div id="messages"></div>
     <div class="composer">
@@ -456,6 +465,19 @@ details.thinking pre { color:var(--muted); }
     <div id="send-note"></div>
   </section>
 </main>
+
+<dialog id="voiceprint-dialog" aria-labelledby="voiceprint-title">
+  <h2><span id="voiceprint-title">声纹</span><button id="voiceprint-close" type="button" aria-label="关闭声纹">关闭</button></h2>
+  <p class="hint">选择聊天中的语音消息，点击“添加录入”保存声纹样本。同名录入可补充样本，说话人以 ASR 返回为准。</p>
+  <form id="voiceprint-form" hidden>
+    <p id="voiceprint-preview"></p>
+    <label><span>姓名</span><input id="voiceprint-name" required maxlength="40" list="voiceprint-names" autocomplete="off" placeholder="输入姓名，或选择已有姓名"></label>
+    <datalist id="voiceprint-names"></datalist>
+    <button id="voiceprint-save" class="primary" type="submit">保存声纹</button>
+  </form>
+  <p id="voiceprint-note" class="note" role="status" aria-live="polite"></p>
+  <div id="voiceprint-profiles"></div>
+</dialog>
 
 <dialog id="history-dialog" aria-labelledby="history-title">
   <button id="history-close" class="history-close" type="button" aria-label="关闭历史会话" title="关闭（Esc）">
@@ -1190,7 +1212,7 @@ function renderVoice(url) {
   return chip;
 }
 
-function renderMessage(m) {
+function renderMessage(m, allowEnroll = false) {
   const wrap = el("div", "msg " + m.role);
   const head = el("div", "head");
   head.append(el("span", "role", ROLE_LABEL[m.role] || m.role));
@@ -1199,10 +1221,11 @@ function renderMessage(m) {
   let meta = (m.time || "").slice(11, 19);  // 每条 message 都带 time（ISO），取 HH:MM:SS
   let instructions = "";  // 工具调用后 SDK 自动补的一轮：text 为空、只带 response_instructions
   if (m.role === "user") {
-    try {  // user content 是 JSON：{text, time, username, round, response_instructions}
+    try {  // user content 是 JSON：{text, time, speaker, round, response_instructions}
       const payload = JSON.parse(body);
       if (payload && typeof payload === "object" && "text" in payload) {
         body = payload.text || "";
+        if (payload.speaker) head.querySelector(".role").textContent = payload.speaker;
         instructions = payload.response_instructions || "";
         meta = [payload.round ? "第 " + payload.round + " 轮" : "", meta || (payload.time || "").slice(11, 19)]
           .filter(Boolean).join(" · ");
@@ -1212,6 +1235,18 @@ function renderMessage(m) {
   if (m.role === "tool") meta = [meta, m.name || "", m.elapsed_time || ""].filter(Boolean).join(" · ");
   if (m.usage) meta = [meta, formatUsage(m.usage)].filter(Boolean).join(" · ");
   if (meta) head.append(el("span", "meta", meta));
+  if (allowEnroll && m.role === "user" && m.audio_url) {
+    const item = fullState.voiceprints?.utterances?.[m.audio_url];
+    if (item) {
+      if (item.speaker) head.querySelector(".role").textContent = item.speaker;
+      const button = el("button", "enroll", item.enrolled_name ? "已录入 · " + item.enrolled_name : "添加录入");
+      button.type = "button";
+      button.disabled = Boolean(item.error);
+      button.title = item.error || "用这句话录入声纹";
+      button.addEventListener("click", () => openVoiceprint(m, body));
+      head.append(button);
+    }
+  }
   wrap.append(head);
 
   if (m.reasoning_content) {  // 开思考时模型的推理过程（reasoning_content），不进 TTS，折叠显示
@@ -1259,13 +1294,13 @@ function renderCompressDivider(comp) {
 }
 
 function renderMessages(msgs, comp) {
-  const sig = JSON.stringify(msgs) + "|" + JSON.stringify(comp || null);
+  const sig = JSON.stringify(msgs) + "|" + JSON.stringify(comp || null) + "|" + JSON.stringify(fullState.voiceprints || null);
   if (sig === lastSig) return;
   lastSig = sig;
 
   const box = $("#messages");
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-  const nodes = msgs.map(renderMessage);
+  const nodes = msgs.map((m) => renderMessage(m, true));
   // 压缩生效后：被摘要覆盖的消息压暗，压缩边界插分隔线（cursor 是去掉 system 后的 history 下标）
   if (comp && comp.summary && comp.cursor > 0) {
     const head = msgs.length && msgs[0].role === "system" ? 1 : 0;
@@ -1278,6 +1313,82 @@ function renderMessages(msgs, comp) {
   $("#msg-count").textContent = msgs.length + " 条";
   if (atBottom) box.scrollTop = box.scrollHeight;
 }
+
+// ---------------- 声纹录入 ----------------
+
+let voiceprintAudioUrl = "";
+let voiceprintSaving = false;
+
+function renderVoiceprints() {
+  const profiles = fullState.voiceprints?.profiles || [];
+  $("#voiceprint-names").replaceChildren(...profiles.map((profile) => {
+    const option = el("option");
+    option.value = profile.name;
+    return option;
+  }));
+  $("#voiceprint-profiles").replaceChildren(...(profiles.length ? profiles.map((profile) => {
+    const row = el("div", "voiceprint-profile");
+    row.append(el("span", null, profile.name + " · " + profile.samples + " 个样本"));
+    const remove = el("button", null, "删除");
+    remove.type = "button";
+    remove.disabled = voiceprintSaving;
+    remove.setAttribute("aria-label", "删除声纹：" + profile.name);
+    remove.addEventListener("click", () => updateVoiceprint("DELETE", {name: profile.name}, "已删除声纹：" + profile.name));
+    row.append(remove);
+    return row;
+  }) : [el("div", "empty", "还没有录入声纹")]));
+}
+
+function voiceprintNote(text, ok) {
+  $("#voiceprint-note").textContent = text;
+  $("#voiceprint-note").className = "note " + (ok ? "ok" : "err");
+}
+
+function openVoiceprint(message = null, text = "") {
+  voiceprintAudioUrl = message?.audio_url || "";
+  const item = fullState.voiceprints?.utterances?.[voiceprintAudioUrl];
+  $("#voiceprint-title").textContent = message ? "添加声纹录入" : "声纹";
+  $("#voiceprint-form").hidden = !message;
+  $("#voiceprint-preview").textContent = text;
+  $("#voiceprint-name").value = item?.enrolled_name || "";
+  voiceprintNote(fullState.voiceprints?.error || "", false);
+  renderVoiceprints();
+  $("#voiceprint-dialog").showModal();
+  if (message) $("#voiceprint-name").focus();
+}
+
+async function updateVoiceprint(method, body, success) {
+  if (voiceprintSaving) return;
+  voiceprintSaving = true;
+  $("#voiceprint-save").disabled = true;
+  voiceprintNote("正在保存…", true);
+  renderVoiceprints();
+  try {
+    const response = await fetch("/api/voiceprints", {
+      method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error(data.error || "保存失败");
+    fullState.voiceprints = data.voiceprints;
+    renderMessages(messages, fullState.compression);
+    voiceprintNote(success, true);
+  } catch (error) {
+    voiceprintNote(error.message || String(error), false);
+  } finally {
+    voiceprintSaving = false;
+    $("#voiceprint-save").disabled = false;
+    renderVoiceprints();
+  }
+}
+
+$("#voiceprint-open").addEventListener("click", () => openVoiceprint());
+$("#voiceprint-close").addEventListener("click", () => $("#voiceprint-dialog").close());
+$("#voiceprint-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const name = $("#voiceprint-name").value.trim();
+  if (!name) return;
+  updateVoiceprint("POST", {name, audio_url: voiceprintAudioUrl}, "已保存声纹：" + name);
+});
 
 // ---------------- 数据库历史会话 ----------------
 
@@ -1360,7 +1471,7 @@ function renderHistoryMessage(message) {
     avatar.append(historyIcon(role));
     row.append(avatar);
   }
-  if (role === "user") node.querySelector(".role").textContent = "你";
+  if (role === "user" && node.querySelector(".role").textContent === ROLE_LABEL.user) node.querySelector(".role").textContent = "你";
   if (role === "tool") {
     const summary = node.querySelector("summary");
     if (summary) {
@@ -1673,6 +1784,7 @@ loadState().then(() => {
     // 每帧只有 messages[start:]，接在自己这份后面；start 是 0 就是整份重来（新会话或首帧）
     messages = messages.slice(0, data.start).concat(data.messages);
     fullState = { ...fullState, ...data.status };
+    if ($("#voiceprint-dialog").open) renderVoiceprints();
     if (busy) return;  // 重启中的中间态（ChatBot 是 None，消息是空的）先收着不画，重启完会取完整状态
     renderStatus(fullState);
     renderMessages(messages, fullState.compression);

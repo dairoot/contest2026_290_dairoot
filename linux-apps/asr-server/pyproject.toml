@@ -10,6 +10,8 @@ dependencies = [
     "scipy>=1.10",
     "websockets>=12.0",
     "python-dotenv>=1.0.0",
+    # asr_wsv2 在 Mac 上直接采集本机麦克风；Linux 板子继续使用 arecord。
+    "sounddevice>=0.5 ; sys_platform == 'darwin'",
     # VAD, speaker recognition, and SenseVoice.
     "torch",
     "torchaudio",

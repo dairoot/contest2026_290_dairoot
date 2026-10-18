@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>实时说话人识别（板载麦克风）</title>
+  <title>实时说话人识别（服务端麦克风）</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif; max-width: 760px; margin: 40px auto; padding: 0 16px; color: #222; }
     h2 { margin-bottom: 12px; }
@@ -19,20 +19,62 @@
     button.play:disabled { background: #f3f4f6; color: #9ca3af; }
     .ts { color: #9ca3af; font-size: 12px; margin-right: 8px; }
     .elapsed { color: #9ca3af; font-size: 12px; margin-left: 8px; }
+    #voiceprints, #enroll-notice { color: #6b7280; font-size: 13px; margin-top: 10px; }
+    button.enroll { float: right; margin-left: 12px; padding: 5px 10px; font-size: 12px; background: #e0e9ff; color: #2563eb; }
+    button.enroll:disabled { background: #f3f4f6; color: #9ca3af; }
+    .line::after { content: ''; display: block; clear: both; }
+    dialog { width: min(420px, calc(100vw - 64px)); border: 0; border-radius: 12px; padding: 24px; box-shadow: 0 16px 48px #0003; }
+    dialog::backdrop { background: #0005; }
+    dialog h3 { margin: 0 0 16px; }
+    dialog label { display: block; margin-bottom: 8px; }
+    dialog input { box-sizing: border-box; width: 100%; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; font: inherit; }
+    #enroll-source { color: #6b7280; line-height: 1.6; overflow-wrap: anywhere; }
+    #enroll-error { color: #dc2626; font-size: 13px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+    #enroll-cancel { background: #e5e7eb; color: #374151; }
   </style>
 </head>
 <body>
-  <h2>实时说话人识别（板载麦克风）</h2>
+  <h2>实时说话人识别（服务端麦克风）</h2>
   <div class="toolbar">
     <span id="status">连接中...</span>
   </div>
+  <div id="voiceprints">声纹列表加载中...</div>
+  <div id="enroll-notice" role="status">在下方消息中点击「添加录入」，为这条语音填写姓名。</div>
   <div id="log"></div>
+
+  <dialog id="enroll-dialog" aria-labelledby="enroll-title">
+    <form id="enroll-form">
+      <h3 id="enroll-title">添加声纹录入</h3>
+      <p id="enroll-source"></p>
+      <label for="enroll-name">姓名</label>
+      <input id="enroll-name" list="enroll-names" placeholder="填写姓名，也可选择已录入的人" maxlength="40" required autocomplete="off" />
+      <datalist id="enroll-names"></datalist>
+      <p id="enroll-error" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="enroll-cancel" type="button">取消</button>
+        <button id="enroll-save" type="submit">保存声纹</button>
+      </div>
+    </form>
+  </dialog>
 
 <script>
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
 
 const statusEl = document.getElementById('status');
 const logEl = document.getElementById('log');
+const voiceprintsEl = document.getElementById('voiceprints');
+const enrollNotice = document.getElementById('enroll-notice');
+const enrollDialog = document.getElementById('enroll-dialog');
+const enrollName = document.getElementById('enroll-name');
+const enrollError = document.getElementById('enroll-error');
+const enrollSave = document.getElementById('enroll-save');
+const enrollCancel = document.getElementById('enroll-cancel');
+const rows = new Map();
+let connected = false;
+let enrollmentAvailable = false;
+let enrollmentPending = false;
+let selectedResult = null;
 
 function nowHMS() {
   const d = new Date();
@@ -77,17 +119,52 @@ function makePlayButton(audioUrl) {
   return btn;
 }
 
-function appendLine(speaker, content, elapsed, audioUrl) {
+function updateEnrollmentControls() {
+  for (const row of rows.values()) {
+    row.enroll.disabled = !connected || !enrollmentAvailable || !row.data.can_enroll;
+  }
+  enrollSave.disabled = enrollmentPending || !connected || !enrollmentAvailable || !enrollName.value.trim();
+  enrollSave.textContent = enrollmentPending ? '保存中...' : '保存声纹';
+  enrollName.disabled = enrollmentPending;
+  enrollCancel.disabled = enrollmentPending;
+}
+
+function updateSpeaker(id, name) {
+  const row = rows.get(id);
+  if (row) {
+    row.data.speaker = name;
+    row.element.querySelector('.spk').textContent = name + ':';
+  }
+}
+
+function appendLine(data) {
+  if (rows.has(data.id)) return;
   const div = document.createElement('div');
   div.className = 'line';
   div.innerHTML = `<span class="ts"></span><span class="spk"></span><span class="txt"></span><span class="elapsed"></span>`;
-  div.prepend(makePlayButton(audioUrl));
+  div.prepend(makePlayButton(data.audio_url));
   div.querySelector('.ts').textContent = nowHMS();
-  div.querySelector('.spk').textContent = speaker + ':';
-  div.querySelector('.txt').textContent = content;
-  if (typeof elapsed === 'number' && !Number.isNaN(elapsed)) {
-    div.querySelector('.elapsed').textContent = `耗时 ${Math.round(elapsed * 1000)} ms`;
+  div.querySelector('.spk').textContent = data.speaker + ':';
+  div.querySelector('.txt').textContent = data.content;
+  if (typeof data.elapsed === 'number' && !Number.isNaN(data.elapsed)) {
+    div.querySelector('.elapsed').textContent = `耗时 ${Math.round(data.elapsed * 1000)} ms`;
   }
+  const enroll = document.createElement('button');
+  enroll.className = 'enroll';
+  enroll.textContent = '添加录入';
+  enroll.title = data.can_enroll ? '使用这条语音录入声纹' : '有效语音不足 1.5 秒或没有有效声纹，请选择较完整的一句话';
+  enroll.addEventListener('click', () => {
+    selectedResult = data;
+    enrollName.value = '';
+    enrollError.textContent = '';
+    document.getElementById('enroll-source').textContent = data.content;
+    updateEnrollmentControls();
+    enrollDialog.showModal();
+    enrollName.focus();
+  });
+  div.prepend(enroll);
+  rows.set(data.id, { element: div, enroll, data });
+  updateEnrollmentControls();
   logEl.appendChild(div);
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -96,19 +173,70 @@ function setStatus(text) {
   statusEl.textContent = text;
 }
 
-// 采集在板子上一直跑，页面只是个观察窗：连上就先收到已有结果，之后实时追加。
+enrollName.addEventListener('input', updateEnrollmentControls);
+enrollCancel.addEventListener('click', () => enrollDialog.close());
+enrollDialog.addEventListener('cancel', (event) => {
+  if (enrollmentPending) event.preventDefault();
+});
+document.getElementById('enroll-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!selectedResult || enrollSave.disabled) return;
+  enrollmentPending = true;
+  enrollError.textContent = '';
+  updateEnrollmentControls();
+  ws.send(JSON.stringify({ type: 'enroll', result_id: selectedResult.id, name: enrollName.value.trim() }));
+});
+
+// 音频在服务端采集，页面只收识别结果、发送所选消息的声纹录入命令。
 const ws = new WebSocket(WS_URL);
-ws.onopen = () => setStatus('聆听中（板载麦克风）');
+ws.onopen = () => {
+  connected = true;
+  setStatus('聆听中（服务端麦克风）');
+  updateEnrollmentControls();
+};
 ws.onmessage = (e) => {
   try {
     const data = JSON.parse(e.data);
     if (data.type === 'error') { setStatus(data.message); return; }
-    appendLine(data.speaker, data.content, data.elapsed, data.audio_url);
+    if (data.type === 'voiceprints') {
+      enrollmentAvailable = !data.error;
+      voiceprintsEl.textContent = data.error || (data.speakers.length
+        ? '已录入：' + data.speakers.map(person => `${person.name}（${person.samples} 条）`).join('、')
+        : '尚未录入声纹');
+      const names = document.getElementById('enroll-names');
+      names.replaceChildren(...data.speakers.map(person => {
+        const option = document.createElement('option');
+        option.value = person.name;
+        return option;
+      }));
+      if (data.result_id && data.name) updateSpeaker(data.result_id, data.name);
+      updateEnrollmentControls();
+      return;
+    }
+    if (data.type === 'enroll_result') {
+      enrollmentPending = false;
+      if (data.ok) {
+        updateSpeaker(data.result_id, data.name);
+        enrollNotice.textContent = data.message;
+        enrollDialog.close();
+      } else {
+        enrollError.textContent = data.message;
+      }
+      updateEnrollmentControls();
+      return;
+    }
+    appendLine(data);
   } catch (err) {
     console.error('bad msg', err);
   }
 };
-ws.onclose = () => setStatus('已断开');
+ws.onclose = () => {
+  connected = false;
+  enrollmentPending = false;
+  setStatus('已断开');
+  if (enrollDialog.open) enrollError.textContent = '连接已断开，请刷新页面后重试';
+  updateEnrollmentControls();
+};
 ws.onerror = (e) => { console.error(e); setStatus('连接错误'); };
 </script>
 </body>
