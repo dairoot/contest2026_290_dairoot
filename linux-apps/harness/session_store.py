@@ -1,11 +1,11 @@
 """通过 SQLAlchemy ORM 保存聊天记录，并提供完整消息的 JSONL 调试快照。"""
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 import datetime
 import json
 from pathlib import Path
 
-from sqlalchemy import ForeignKey, JSON, Text, URL, create_engine, event
+from sqlalchemy import ForeignKey, JSON, Text, URL, create_engine, event, func, or_, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 
 
@@ -51,6 +51,80 @@ def save_debug_log(path: str, messages: list[dict]) -> None:
     log_path = Path(path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text(content, encoding="utf-8")
+
+
+@contextmanager
+def _read_database(path: str):
+    """查询使用只读连接；尚未保存过会话时不创建数据库或目录。"""
+    database = Path(path).resolve()
+    if not database.exists():
+        yield None
+        return
+    engine = create_engine(URL.create(
+        "sqlite+pysqlite", database=database.as_uri(), query={"mode": "ro", "uri": "true"},
+    ))
+    try:
+        with Session(engine) as session:
+            yield session
+    finally:
+        engine.dispose()
+
+
+def _preview(content: str | None) -> str:
+    if not content:
+        return ""
+    try:
+        payload = json.loads(content)
+        if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+            content = payload["text"]
+    except (TypeError, ValueError):
+        pass
+    return content[:160]
+
+
+def query_sessions(path: str, *, query: str = "", limit: int = 20, offset: int = 0) -> dict:
+    """按会话 ID 或任意消息内容搜索，返回最近开始的会话摘要。"""
+    result = {"sessions": [], "total": 0, "limit": limit, "offset": offset}
+    with _read_database(path) as session:
+        if session is None:
+            return result
+        filters = []
+        if query:
+            filters.append(or_(
+                ChatSession.id.contains(query, autoescape=True),
+                ChatSession.messages.any(ChatMessage.content.contains(query, autoescape=True)),
+            ))
+        result["total"] = session.scalar(select(func.count()).select_from(ChatSession).where(*filters))
+        message_count = select(func.count()).where(ChatMessage.session_id == ChatSession.id).scalar_subquery()
+        first_user_content = (
+            select(ChatMessage.content)
+            .where(ChatMessage.session_id == ChatSession.id, ChatMessage.role == "user")
+            .order_by(ChatMessage.position).limit(1).scalar_subquery()
+        )
+        rows = session.execute(
+            select(ChatSession.id, ChatSession.started_at, ChatSession.ended_at,
+                   message_count.label("message_count"), first_user_content.label("preview"))
+            .where(*filters).order_by(ChatSession.started_at.desc(), ChatSession.id.desc())
+            .limit(limit).offset(offset)
+        ).mappings()
+        result["sessions"] = [{**row, "preview": _preview(row["preview"])} for row in rows]
+    return result
+
+
+def get_session(path: str, session_id: str) -> dict | None:
+    """读取会话与按原位置排序的消息，content 保持数据库原值。"""
+    with _read_database(path) as session:
+        record = session.get(ChatSession, session_id) if session is not None else None
+        if record is None:
+            return None
+        return {
+            "id": record.id, "started_at": record.started_at, "ended_at": record.ended_at,
+            "messages": [
+                {"position": message.position, "role": message.role,
+                 "content": message.content, "usage": message.usage}
+                for message in record.messages
+            ],
+        }
 
 
 def save_session(

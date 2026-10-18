@@ -118,6 +118,7 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         self.client.chat_bot = None
         first, second = make_bot(self.messages), make_bot(self.messages[:2])
         with patch.object(main, "ChatBot", side_effect=[first, second]), \
+                patch.object(main, "tts_configuration_error", return_value=""), \
                 patch.object(main, "load_skills", return_value=[]), \
                 patch.object(main, "register_default_tools_server"), \
                 patch.object(self.client, "_open_input_stream"), \
