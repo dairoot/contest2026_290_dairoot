@@ -135,23 +135,22 @@ class SpeakerWorker:
     def get_speaker_name(
         self,
         embedding: np.ndarray,
-        offset: int = 0,
-        speech_ms: float | None = None,
         *,
+        speech_ms: float,
+        offset: int = 0,
         preset_speakers: list[dict] | None = None,
     ) -> tuple[str, float]:
         """根据 embedding 找匹配的说话人。
 
         speech_ms 为该 embedding 对应音频时长（毫秒，由上游 ASR 提供）。
         低于 MIN_SV_SPEECH_MS 时视为不可靠，返回 UNKNOWN_SPEAKER 且不入库。
-        不传 speech_ms 时退化为老行为，保持向后兼容。
         优先匹配客户端设置的预设姓名；预设样本不参与自动学习或匿名编号分配。
         """
-        if speech_ms is not None and speech_ms < MIN_SV_SPEECH_MS:
+        if speech_ms < MIN_SV_SPEECH_MS:
             return UNKNOWN_SPEAKER, -1.0
 
         if preset_speakers:
-            # 模型更换后旧向量可能维度不同，不能让姓名匹配中断文本识别。
+            # 只接受与当前 embedding 维度相同的客户端预设样本。
             candidates = [item for item in preset_speakers if np.shape(item["embedding"]) == np.shape(embedding)]
             matched, score = self.classify(embedding, candidates)
             if matched is not None:

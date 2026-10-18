@@ -57,7 +57,7 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
              "usage": {"total_tokens": 42}, "time": "2026-10-18 11:04:06"},
         ]
         self.saved_messages = [
-            {"role": "user", "content": '{"text":"调低音量"}'},
+            {"role": "user", "content": "调低音量"},
             {"role": "assistant", "content": None},
             {"role": "tool", "content": '{"percent":70}'},
             {"role": "assistant", "content": "音量已调低。", "usage": {"total_tokens": 42}},
@@ -202,13 +202,64 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.debug_messages(session_id), expected)
         self.assertEqual(self.bot.llm.messages, original)
 
-    async def test_content_is_original_content_value_without_outer_message(self):
-        content = '{"text": "你哈", "time": "2026-10-18T13:09:44.584297+08:00", "round": 1}'
-        message = {"role": "user", "content": content, "time": "2026-10-18T13:09:44.584297+08:00"}
+    async def test_user_content_stores_text_and_preserves_metadata(self):
+        content = '{"text": "查一下天气。", "time": "2026-10-18T18:43:21.916778+08:00", "round": 1, "speaker": "unknown"}'
+        message = {"role": "user", "content": content}
         original = copy.deepcopy(message)
         save_session(str(self.path), "content", STARTED_AT, STARTED_AT, [message])
-        self.assertEqual(self.query("SELECT role, content, usage FROM messages"), [("user", content, None)])
+        self.assertEqual(self.query("SELECT role, content, usage FROM messages"), [("user", "查一下天气。", None)])
+        self.assertEqual(self.query("SELECT time, speaker FROM messages"),
+                         [("2026-10-18T18:43:21.916778+08:00", "unknown")])
         self.assertEqual(message, original)
+
+    async def test_text_extraction_applies_only_to_user_json_objects_with_string_text(self):
+        content = '{"text": "开灯", "round": 1}'
+        cases = [
+            ({"role": "user", "content": content}, "开灯"),
+            ({"role": "user", "content": {"text": "  保留空白\n", "speaker": "张三"}}, "  保留空白\n"),
+            ({"role": "user", "content": '{"text": "", "response_instructions": "继续"}'}, ""),
+            ({"role": "user", "content": "普通文本"}, "普通文本"),
+            ({"role": "user", "content": '{"text":'}, '{"text":'),
+            ({"role": "user", "content": '{"text": null}'}, '{"text": null}'),
+            ({"role": "user", "content": '{"text": 42}'}, '{"text": 42}'),
+            ({"role": "user", "content": '{"round": 1}'}, '{"round": 1}'),
+            ({"role": "assistant", "content": content}, content),
+            ({"role": "tool", "content": content}, content),
+        ]
+        messages = [message for message, expected in cases]
+        original = copy.deepcopy(messages)
+        save_session(str(self.path), "contents", STARTED_AT, STARTED_AT, messages)
+        self.assertEqual(self.query("SELECT content FROM messages ORDER BY position"),
+                         [(expected,) for message, expected in cases])
+        self.assertEqual(messages, original)
+
+    async def test_message_time_preserves_source_and_handles_missing_or_structured_content(self):
+        sent_at = "2026-10-18T13:09:44.584297+08:00"
+        cases = [
+            ({"content": "你好", "time": sent_at}, sent_at),
+            ({"content": json.dumps({"text": "你好", "time": sent_at})}, sent_at),
+            ({"content": {"text": "你好", "time": sent_at}}, sent_at),
+            ({"content": {"time": sent_at}, "time": STARTED_AT}, STARTED_AT.isoformat()),
+            ({"content": {"time": sent_at}, "time": "2026-10-18 11:04:06"}, "2026-10-18 11:04:06"),
+            ({"content": {"time": sent_at}, "time": None}, sent_at),
+            ({"content": {"time": sent_at}, "time": ""}, sent_at),
+            ({"content": {"time": STARTED_AT}}, STARTED_AT.isoformat()),
+            ({"content": None}, None),
+            ({}, None),
+            ({"content": ""}, None),
+            ({"content": "普通文本"}, None),
+            ({"content": '{"time":'}, None),
+            ({"content": "null"}, None),
+            ({"content": '[{"time": "2026-10-18"}]'}, None),
+            ({"content": {"time": 123}, "time": False}, None),
+            ({"content": {"time": ""}}, None),
+        ]
+        messages = [{"role": "user", **message} for message, expected in cases]
+        original = copy.deepcopy(messages)
+        save_session(str(self.path), "times", STARTED_AT, STARTED_AT, messages)
+        self.assertEqual(self.query("SELECT time FROM messages ORDER BY position"),
+                         [(expected,) for message, expected in cases])
+        self.assertEqual(messages, original)
 
     async def test_null_missing_empty_and_structured_content(self):
         structured = [{"type": "text", "text": "你好"}]
@@ -222,6 +273,30 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         rows = self.query("SELECT content FROM messages ORDER BY position")
         self.assertEqual(rows[:3], [(None,), (None,), ("",)])
         self.assertEqual(json.loads(rows[3][0]), structured)
+
+    async def test_speaker_is_stored_separately_with_content_fallback(self):
+        content = '{"text": "开灯", "speaker": "张三"}'
+        cases = [
+            ({"content": content}, "张三"),
+            ({"content": {"text": "关灯", "speaker": "speaker_2"}}, "speaker_2"),
+            ({"content": content, "speaker": "李四"}, "李四"),
+            ({"content": content, "speaker": None}, "张三"),
+            ({"content": content, "speaker": ""}, "张三"),
+            ({"content": "普通文本", "speaker": "unknown"}, "unknown"),
+            ({"content": "普通文本"}, None),
+            ({"content": None}, None),
+            ({}, None),
+            ({"content": '{"speaker":'}, None),
+            ({"content": '[{"speaker": "张三"}]'}, None),
+            ({"content": {"speaker": 123}, "speaker": False}, None),
+        ]
+        messages = [{"role": "user", **message} for message, expected in cases]
+        original = copy.deepcopy(messages)
+        save_session(str(self.path), "speakers", STARTED_AT, STARTED_AT, messages)
+        self.assertEqual(self.query("SELECT speaker FROM messages ORDER BY position"),
+                         [(expected,) for message, expected in cases])
+        self.assertEqual(self.query("SELECT content FROM messages WHERE position = 0"), [("开灯",)])
+        self.assertEqual(messages, original)
 
     async def test_usage_is_stored_separately_from_content(self):
         session_id = self.client.save_messages()
@@ -318,6 +393,8 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
                                  [message["content"] for message in self.saved_messages])
                 self.assertEqual([message.usage for message in record.messages],
                                  [None, None, None, {"total_tokens": 42}])
+                self.assertEqual([message.time for message in record.messages],
+                                 [None, None, None, "2026-10-18 11:04:06"])
                 self.assertTrue(all(message.session is record for message in record.messages))
         finally:
             engine.dispose()

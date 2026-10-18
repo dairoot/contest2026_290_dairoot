@@ -241,7 +241,20 @@
       "collection_mode": "cli",
       "health": "ok",
       "model": "claude-opus-5"
+    },
+    {
+      "session_id": "01a14e93-17fb-7e72-83e5-414ed0423492",
+      "tool": "codex",
+      "started_at": "2026-10-18T10:34:22.765Z",
+      "last_event_at": "2026-10-18T10:50:44.461Z",
+      "event_count": 31,
+      "file_path": "logs/dairoot/2026-10-18/codex__01a14e93-17fb-7e72-83e5-414ed0423492.jsonl",
+      "collection_mode": "vscode_extension_partial",
+      "model": "gpt-6.1-sol",
+      "redacted_count_total": 0,
+      "health": "degraded",
+      "data_completeness_warning": "Official Codex snapshot adapter exports user/assistant text; tool and runtime records are omitted."
     }
   ],
-  "updated_at": "2026-09-15T07:58:11.205176+00:00"
+  "updated_at": "2026-10-18T10:52:30.116Z"
 }

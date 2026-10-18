@@ -38,6 +38,7 @@
 
 ## 实现约束
 
+- 本项目只维护当前版本，不添加或保留历史版本的配置迁移、旧格式解析、旧接口别名和调用方式兼容；当前硬件适配、外部协议支持及故障回退按实际运行需求保留。
 - openvela 侧的 KWS 是纯 C / float32 引擎，当前板配置启用 PDM 16 kHz；Linux 侧的 ASR、声纹和 YOLO 才使用 RKNN。当前 FSMN-VAD 在 RK3576 上仍走 CPU，没有 VAD RKNN 后端。
 - ASR/声纹转换默认推荐 Ubuntu x86_64 的独立 Toolkit2 环境。ONNX 导出与 RKNN 转换是不同阶段，环境和资源要求见语音 Skill。YOLO 有板上转换经验，按它自己的 Skill 选择转换机。
 - `kws_tables.h`、`kws_model_data.h`、`kws_golden.h` 由 `tools/kws/export_c.py` 生成，不手工修改权重和查表数据。前端或网络变更需同步处理训练数据、导出和对拍。

@@ -805,7 +805,7 @@ function renderToolList(row, tools) {
   row.querySelector(".mcp-tools").replaceChildren(
     ...tools.map((tool) => {
       const item = el("div", "mcp-tool");
-      const name = el("div", "mcp-tool-name", tool.name || tool);  // 兼容旧版只给工具名的情况
+      const name = el("div", "mcp-tool-name", tool.name);
       if (row.dataset.toggle && tool.enabled !== undefined) {  // 自带工具：每个工具一个开关
         const box = el("input");
         box.type = "checkbox";
@@ -1213,16 +1213,16 @@ function renderVoice(url) {
   return chip;
 }
 
-function renderMessage(m, allowEnroll = false) {
+function renderMessage(m, live = false) {
   const wrap = el("div", "msg " + m.role);
   const head = el("div", "head");
-  head.append(el("span", "role", ROLE_LABEL[m.role] || m.role));
+  head.append(el("span", "role", (m.role === "user" && m.speaker) || ROLE_LABEL[m.role] || m.role));
 
   let body = m.content == null ? "" : String(m.content);
   let meta = (m.time || "").slice(11, 19);  // 每条 message 都带 time（ISO），取 HH:MM:SS
   let instructions = "";  // 工具调用后 SDK 自动补的一轮：text 为空、只带 response_instructions
-  if (m.role === "user") {
-    try {  // user content 是 JSON：{text, time, speaker, round, response_instructions}
+  if (live && m.role === "user") {
+    try {  // 实时 SDK 的 user content 是 JSON；历史消息直接显示已入库的正文。
       const payload = JSON.parse(body);
       if (payload && typeof payload === "object" && "text" in payload) {
         body = payload.text || "";
@@ -1236,7 +1236,7 @@ function renderMessage(m, allowEnroll = false) {
   if (m.role === "tool") meta = [meta, m.name || "", m.elapsed_time || ""].filter(Boolean).join(" · ");
   if (m.usage) meta = [meta, formatUsage(m.usage)].filter(Boolean).join(" · ");
   if (meta) head.append(el("span", "meta", meta));
-  if (allowEnroll && m.role === "user" && m.audio_url) {
+  if (live && m.role === "user" && m.audio_url) {
     const item = fullState.voiceprints?.utterances?.[m.audio_url];
     if (item) {
       if (item.speaker) head.querySelector(".role").textContent = item.speaker;
@@ -1435,15 +1435,7 @@ function historyPlaceholder(title, subtitle = "", error = false) {
 }
 
 function historyMessageText(message) {
-  if (!message || message.content == null) return "";
-  let text = String(message.content);
-  if (message.role === "user") {
-    try {
-      const payload = JSON.parse(text);
-      if (payload && typeof payload.text === "string") text = payload.text;
-    } catch (error) { /* 纯文本直接显示 */ }
-  }
-  return text.trim();
+  return String(message?.content ?? "").trim();
 }
 
 function historyDuration(session) {

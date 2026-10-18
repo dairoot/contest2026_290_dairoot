@@ -43,12 +43,6 @@ class VoiceprintTest(unittest.TestCase):
     def test_enrollment_survives_restart_and_coexists_with_chat_history(self):
         now = datetime.now(timezone.utc)
         save_session(self.path, "chat-1", now, now, [{"role": "user", "content": "你好"}])
-        # 模拟升级前只有聊天表的数据库。
-        engine = create_engine("sqlite:///" + self.path)
-        try:
-            Voiceprint.__table__.drop(engine)
-        finally:
-            engine.dispose()
         self.assertEqual(self.client.status()["profiles"], [])
         self.client.capture(utterance())
         self.client.enroll("/audio/one.wav", " 小明 ")
