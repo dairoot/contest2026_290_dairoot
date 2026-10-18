@@ -1,4 +1,4 @@
-"""SQLite 聊天记录与会话生命周期回归；不使用真实设备或外部服务。"""
+"""SQLite、JSONL 调试日志与会话生命周期回归；不使用真实设备或外部服务。"""
 
 from contextlib import closing
 import copy
@@ -37,10 +37,13 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.path = Path(self.temp.name) / "sessions" / "history.sqlite3"
+        self.path = Path(self.temp.name) / "data" / "history.sqlite3"
         db_path = patch.object(main, "SESSION_DB_PATH", str(self.path))
         db_path.start()
         self.addCleanup(db_path.stop)
+        debug = patch.object(main, "DEBUG", True)
+        debug.start()
+        self.addCleanup(debug.stop)
         self.messages = [
             {"role": "system", "content": "你是语音助手"},
             {"role": "user", "content": '{"text":"调低音量"}', "audio_url": "/audio/hello.wav"},
@@ -79,11 +82,16 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
             messages.append(message)
         return messages
 
+    def debug_messages(self, session_id):
+        [path] = self.path.parent.glob(f"*-{session_id}.jsonl")
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
     async def test_close_event_saves_non_system_messages_only_once(self):
         await self.client.play_audio(self.bot)
         self.assertTrue(self.client.is_session_closed)
         session_id = self.client._session_id
         self.assertEqual(self.stored_messages(session_id), self.saved_messages)
+        self.assertEqual(self.debug_messages(session_id), self.messages)
         rows = self.query("SELECT position, role FROM messages ORDER BY position")
         self.assertEqual(rows, [(i, message["role"]) for i, message in enumerate(self.saved_messages)])
         self.assertEqual(self.bot.llm.messages, self.messages)
@@ -91,10 +99,19 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(started_at, STARTED_AT.isoformat())
         self.assertEqual(datetime.datetime.fromisoformat(ended_at).utcoffset(), datetime.timedelta(0))
         self.assertGreaterEqual(ended_at, started_at)
-        self.assertEqual(self.client.save_messages(), "")
-        await self.client._stop_bot()
+        with patch.object(main, "save_debug_log") as save_log:
+            self.assertEqual(self.client.save_messages(), "")
+            await self.client._stop_bot()
+        save_log.assert_not_called()
         self.assertEqual(self.query("SELECT count(*) FROM sessions"), [(1,)])
         self.bot.close.assert_awaited_once()
+
+    async def test_debug_disabled_saves_database_without_jsonl(self):
+        with patch.object(main, "DEBUG", False):
+            await self.client.play_audio(self.bot)
+            await self.client._stop_bot()
+        self.assertEqual(self.stored_messages(self.client._session_id), self.saved_messages)
+        self.assertEqual(list(self.path.parent.glob("*.jsonl")), [])
 
     async def test_restart_keeps_sessions_with_identical_start_time_separate(self):
         # 走真实 restart/_start_bot，替换 SDK 和音频入口，确保每次重建都重置会话 ID。
@@ -116,6 +133,9 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.query("SELECT started_at FROM sessions"), [(STARTED_AT.isoformat(),)] * 2)
         self.assertEqual(self.stored_messages(first_id), self.saved_messages)
         self.assertEqual(self.stored_messages(second_id), self.saved_messages[:1])
+        self.assertEqual(self.debug_messages(first_id), self.messages)
+        self.assertEqual(self.debug_messages(second_id), self.messages[:2])
+        self.assertEqual(len(list(self.path.parent.glob("*.jsonl"))), 2)
 
     async def test_stop_saves_after_sdk_stops_generating_messages(self):
         self.bot.llm.messages = self.messages[:2]
@@ -127,14 +147,16 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         await self.client._stop_bot()
         self.assertIsNone(self.client.chat_bot)
         self.assertEqual(self.stored_messages(self.client._session_id), [self.saved_messages[0], self.saved_messages[-1]])
+        self.assertEqual(self.debug_messages(self.client._session_id), [*self.messages[:2], self.messages[-1]])
 
     async def test_sdk_close_failure_still_saves_messages(self):
         self.bot.close.side_effect = RuntimeError("close failed")
         with self.assertRaisesRegex(RuntimeError, "close failed"):
             await self.client._stop_bot()
         self.assertEqual(self.stored_messages(self.client._session_id), self.saved_messages)
+        self.assertEqual(self.debug_messages(self.client._session_id), self.messages)
 
-    async def test_no_bot_or_only_system_messages_creates_no_database(self):
+    async def test_no_bot_or_only_system_messages_creates_no_files(self):
         self.client.chat_bot = None
         self.assertEqual(self.client.save_messages(), "")
         for messages in ([], self.messages[:1], self.messages[:1] * 2):
@@ -143,6 +165,7 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
                 self.client._messages_saved = False
                 self.assertEqual(self.client.save_messages(), "")
                 self.assertFalse(self.path.exists())
+                self.assertFalse(self.path.parent.exists())
 
     async def test_store_filters_system_messages_anywhere_without_changing_input(self):
         messages = [*self.messages[:2], self.messages[0], *self.messages[2:], self.messages[0]]
@@ -164,6 +187,19 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         session_id = self.client.save_messages()
         self.assertTrue(session_id)
         self.assertEqual(self.stored_messages(session_id), self.saved_messages[:1])
+        self.assertEqual(self.debug_messages(session_id), [self.messages[1]])
+
+    async def test_debug_log_keeps_structured_fields_and_serializes_other_values(self):
+        self.bot.llm.messages = [
+            {"role": "system", "content": "你是语音助手"},
+            {"role": "user", "content": [{"type": "text", "text": "你好\n世界"}], "time": STARTED_AT},
+        ]
+        original = copy.deepcopy(self.bot.llm.messages)
+        session_id = self.client.save_messages()
+        expected = copy.deepcopy(original)
+        expected[1]["time"] = str(STARTED_AT)
+        self.assertEqual(self.debug_messages(session_id), expected)
+        self.assertEqual(self.bot.llm.messages, original)
 
     async def test_content_is_original_content_value_without_outer_message(self):
         content = '{"text": "你哈", "time": "2026-10-18T13:09:44.584297+08:00", "round": 1}'
@@ -223,6 +259,18 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         await self.client._stop_bot()
         self.assertEqual(self.stored_messages(self.client._session_id), self.saved_messages)
         self.assertEqual(self.query("SELECT ended_at FROM sessions"), [(ended_at.isoformat(),)])
+        self.assertEqual(self.debug_messages(self.client._session_id), self.messages)
+
+    async def test_debug_log_failure_does_not_interrupt_close_and_retries_without_duplicate_db_rows(self):
+        with patch.object(main, "save_debug_log", side_effect=OSError("write failed")), \
+                self.assertLogs("web_console", level="ERROR"):
+            await self.client.play_audio(self.bot)
+        self.assertTrue(self.client.is_session_closed)
+        self.assertEqual(self.stored_messages(self.client._session_id), self.saved_messages)
+        self.assertEqual(list(self.path.parent.glob("*.jsonl")), [])
+        await self.client._stop_bot()
+        self.assertEqual(self.debug_messages(self.client._session_id), self.messages)
+        self.assertEqual(self.query("SELECT count(*) FROM sessions"), [(1,)])
 
     async def test_sqlite_failure_is_logged_and_can_be_retried(self):
         self.path.parent.mkdir()
@@ -230,8 +278,11 @@ class SessionStoreTest(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("web_console", level="ERROR"):
             self.assertEqual(self.client.save_messages(), "")
         self.assertFalse(self.client._messages_saved)
+        self.assertEqual(self.debug_messages(self.client._session_id), self.messages)
         self.path.unlink()
-        self.assertTrue(self.client.save_messages())
+        with patch.object(main, "save_debug_log") as save_log:
+            self.assertTrue(self.client.save_messages())
+        save_log.assert_not_called()
         self.assertEqual(self.stored_messages(self.client._session_id), self.saved_messages)
 
     async def test_failed_message_insert_rolls_back_whole_session(self):
