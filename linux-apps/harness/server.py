@@ -5,6 +5,8 @@
 - POST /api/config   保存配置并按新配置重建 ChatBot
 - POST /api/restart  用当前配置重开一轮会话
 - POST /api/send     发一句文本给 ChatBot（等同说话，照样会出声）
+- POST /api/voiceprints  从当前语音消息录入姓名与声纹，保存到 harness 数据库
+- DELETE /api/voiceprints  按姓名删除声纹
 - POST /api/mcp/install  给缺 Python 包连不上的 MCP server 装包，装完自动重启重连
 - POST /api/skills/install?filename=...  上传 ZIP 技能包或 SKILL.md，保存并重启后生效
 - POST /api/skills/command  执行技能安装命令，输出通过 SSE 推送
@@ -75,6 +77,26 @@ def create_app(client) -> Starlette:
         except ValueError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         return JSONResponse({"ok": True, "package": package})
+
+    async def update_voiceprints(request: Request):
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("请求需要 JSON 对象")
+            name = body.get("name", "")
+            audio_url = body.get("audio_url", "")
+            if not isinstance(name, str) or not isinstance(audio_url, str):
+                raise ValueError("姓名和录音地址必须是字符串")
+            if request.method == "DELETE":
+                client.voiceprints.remove(name)
+            else:
+                client.voiceprints.enroll(audio_url, name)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except (OSError, SQLAlchemyError):
+            logger.exception("保存声纹失败")
+            return JSONResponse({"ok": False, "error": "保存声纹失败，请检查数据库"}, status_code=503)
+        return JSONResponse({"ok": True, "voiceprints": client.voiceprints.status()})
 
     async def post_skill_install(request: Request):
         data = bytearray()
@@ -183,6 +205,7 @@ def create_app(client) -> Starlette:
             Route("/api/config", post_config, methods=["POST"]),
             Route("/api/restart", post_restart, methods=["POST"]),
             Route("/api/send", post_send, methods=["POST"]),
+            Route("/api/voiceprints", update_voiceprints, methods=["POST", "DELETE"]),
             Route("/api/mcp/install", post_mcp_install, methods=["POST"]),
             Route("/api/skills/install", post_skill_install, methods=["POST"]),
             Route("/api/skills/command", post_skill_command, methods=["POST"]),

@@ -20,6 +20,46 @@ uv run main.py
 同机部署时，在本目录 `.env` 中配置
 `ASR_SERVER_WS_URL=ws://127.0.0.1:8086/ws`，并准备所选 LLM / TTS 后端的个人配置。
 
+## 声纹
+
+配置台的当前语音消息旁提供“添加录入”：选择一句至少 1.5 秒有效语音，输入姓名并保存。
+可选择已有姓名补充样本，每人保留最近 10 个不同样本；重复录入同一句不会增加样本。
+聊天区右上角“声纹”可查看姓名、样本数并删除声纹。历史会话和纯文本消息不能录入。
+
+姓名和归一化后的 embedding 保存在 **harness 本机**的 `data/history.sqlite3`，
+使用 SQLAlchemy ORM 的 `Voiceprint` 模型及 `voiceprints` 表（`name`、`embeddings`、`updated_at`），
+与聊天记录共用数据库，重启后自动读取。浏览器不保存声纹；ASR 服务不保存这些姓名或样本。
+数据库在首次录入时自动创建，新表兼容已有聊天数据库，无需手工迁移。
+
+harness 直接使用 ASR `/ws` 的 STT 消息中的 `embedding`、`speech_ms` 和 `audio_url`，
+无需重复请求 `/embedding`。需使用当前的 [asr-server](../asr-server/README.md)。
+只有点击录入的样本会持久化；本轮最近 200 句的临时 embedding 留在内存，重开会话即清空。
+embedding 不发给浏览器或 LLM。
+
+说话人以 ASR 返回的 `speaker` 为准，SDK 原样写入用户消息 JSON 的 `speaker`，
+页面显示并随聊天记录保存。harness 不进行二次声纹匹配，也不使用本地录入样本改写该字段。
+手动录入仅保存样本，不改变 ASR 的说话人结果；打字消息不带 `speaker`。
+
+此接入要求 SDK 支持 `speaker` 参数。本机联调尚未发布的 SDK 源码时，在 harness 目录执行：
+
+```bash
+PYTHONPATH=/Users/mac/src/aichat_sdk uv run main.py
+```
+
+运行离线测试时也可使用相同的 `PYTHONPATH` 指向本地 SDK。部署时需安装包含此接口的 SDK 版本。
+
+配置台内部接口（均由 harness 处理）：
+
+- `POST /api/voiceprints`：`{"name":"小明","audio_url":"消息中的录音地址"}`，从当前缓存录入。
+- `DELETE /api/voiceprints`：`{"name":"小明"}`，删除该姓名全部样本。
+- `GET /api/state` 和 `/api/events` 的 `status.voiceprints` 返回姓名、样本数及当前消息的 ASR 说话人/录入状态，不含 embedding。
+
+离线回归（模拟 ASR/LLM，不访问真实模型、麦克风或外部服务）：
+
+```bash
+uv run python -m unittest -v tests.test_voiceprint tests.test_state_events tests.test_session_store
+```
+
 ## TTS 配置
 
 TTS 引擎选项从 SDK 的 `get_tts_engines()` 动态加载，要求 `aichat-sdk>=0.1.1`。

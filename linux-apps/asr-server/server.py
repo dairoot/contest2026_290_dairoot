@@ -4,6 +4,9 @@ Clients send raw 16 kHz mono Float32LE PCM in binary WebSocket messages.  The
 transport validates and forwards each message as it arrives; ``AsrClient``
 normalizes arbitrary message boundaries into 240 ms processing blocks.  Every
 ``stt`` event is returned as a JSON text message.
+STT messages include a connection-local anonymous speaker label. The separate
+/embedding endpoint extracts only an embedding from one complete audio clip.
+Named speaker profiles and real-name matching belong to the client.
 """
 
 from __future__ import annotations
@@ -24,7 +27,6 @@ import websockets
 from websockets.datastructures import Headers
 from websockets.http11 import Response
 
-from asr_client import AsrClient
 from config import ASR_MODEL_TYPE
 
 logger = logging.getLogger(__name__)
@@ -32,9 +34,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8086
 WS_PATH = "/ws"
+EMBEDDING_WS_PATH = "/embedding"
 AUDIO_URL_PREFIX = "/audio/"
 DEFAULT_AUDIO_SAVE_DIR = Path(__file__).resolve().parent / "audio_logs"
 SAMPLE_BYTES = np.dtype("<f4").itemsize
+SAMPLE_RATE = 16000
+MIN_EMBEDDING_SAMPLES = SAMPLE_RATE * 1500 // 1000
+MAX_EMBEDDING_SAMPLES = SAMPLE_RATE * 3
 
 AsrClientFactory = Callable[..., Any]
 
@@ -114,7 +120,7 @@ def create_http_handler(audio_save_dir: str = "") -> Callable[[Any, Any], Respon
 
     def process_request(connection: Any, request: Any) -> Response | None:
         request_path = urlparse(request.path).path
-        if request_path == WS_PATH:
+        if request_path in (WS_PATH, EMBEDDING_WS_PATH):
             return None
         if not request_path.startswith(AUDIO_URL_PREFIX):
             return _http_response(404, "Not Found")
@@ -144,11 +150,71 @@ def _create_asr_client(
     slow_reply_silence_duration_ms: int,
     audio_save_dir: str,
 ) -> Any:
+    # 收到首个有效音频帧后再初始化模型。
+    from asr_client import AsrClient
+
     return AsrClient(
         model_type=model_type,
         slow_reply_silence_duration_ms=slow_reply_silence_duration_ms,
         audio_save_dir=audio_save_dir,
     )
+
+
+def _create_speaker_worker() -> Any:
+    from speaker import SpeakerWorker
+
+    return SpeakerWorker()
+
+
+def _decode_audio(message: Any) -> tuple[np.ndarray | None, dict[str, str] | None]:
+    if not isinstance(message, (bytes, bytearray, memoryview)):
+        code, reason = "binary_audio_required", "send audio as binary Float32LE PCM"
+    elif len(message) % SAMPLE_BYTES:
+        code, reason = "invalid_audio_size", "binary audio length must be a multiple of 4 bytes"
+    else:
+        chunk = np.frombuffer(message, dtype="<f4").astype(np.float32, copy=True)
+        if np.isfinite(chunk).all():
+            np.clip(chunk, -1.0, 1.0, out=chunk)
+            return chunk, None
+        code, reason = "invalid_audio_value", "audio samples must be finite float32 values"
+    return None, {"type": "error", "code": code, "message": reason}
+
+
+async def handle_embedding_connection(
+    websocket: Any, *, worker_factory: Callable[[], Any] | None = None,
+) -> None:
+    """One binary message is a complete clip; return its speaker embedding only."""
+    if _request_path(websocket) != EMBEDDING_WS_PATH:
+        await websocket.close(code=1008, reason=f"WebSocket path must be {EMBEDDING_WS_PATH}")
+        return
+    worker = None
+    try:
+        async for message in websocket:
+            audio, error = _decode_audio(message)
+            if error is None and audio.size < MIN_EMBEDDING_SAMPLES:
+                error = {
+                    "type": "error", "code": "audio_too_short",
+                    "message": "send at least 1.5 seconds of 16 kHz mono Float32LE PCM in one message",
+                }
+            if error is not None:
+                await websocket.send(json.dumps(error))
+                continue
+            try:
+                if worker is None:
+                    worker = (worker_factory or _create_speaker_worker)()
+                # 与 AsrClient 的声纹输入一致，最多使用开头 3 秒。
+                embedding = np.asarray(
+                    await worker.generate_embedding(audio[:MAX_EMBEDDING_SAMPLES]), dtype=np.float32,
+                )
+                if embedding.ndim != 1 or not embedding.size or not np.isfinite(embedding).all():
+                    raise ValueError("speaker model returned an invalid embedding")
+                response = {"embedding": embedding.tolist()}
+            except Exception as exc:
+                logger.exception("Speaker embedding extraction failed")
+                response = {"type": "error", "code": "embedding_failed", "message": str(exc)}
+            await websocket.send(json.dumps(response, ensure_ascii=False, allow_nan=False))
+    except websockets.ConnectionClosed:
+        pass
 
 
 async def handle_connection(
@@ -165,77 +231,48 @@ async def handle_connection(
         return
 
     factory = client_factory or _create_asr_client
-    asr_client = factory(
-        model_type=model_type,
-        slow_reply_silence_duration_ms=slow_reply_silence_duration_ms,
-        audio_save_dir=audio_save_dir,
-    )
-    asr_client._loop = asyncio.get_running_loop()
+    asr_client = None
+    processor_task = None
     remote_address = getattr(websocket, "remote_address", None)
     logger.info("ASR WebSocket connected: %s", remote_address)
 
-    @asr_client.on("stt")
     async def send_stt(payload: dict[str, Any]) -> None:
-        await websocket.send(serialize_stt(payload, audio_save_dir=audio_save_dir))
+        speaker_name, _ = asr_client.speaker.get_speaker_name(
+            payload["embedding"], speech_ms=payload.get("speech_ms"),
+        )
+        await websocket.send(serialize_stt(
+            {**payload, "speaker": speaker_name}, audio_save_dir=audio_save_dir,
+        ))
 
-    processor_task = asyncio.create_task(
-        asr_client.process_audio_chunk(),
-        name="asr-websocket-audio-processor",
-    )
     try:
         async for message in websocket:
-            if not isinstance(message, (bytes, bytearray, memoryview)):
-                await websocket.send(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "code": "binary_audio_required",
-                            "message": "send audio as binary Float32LE PCM",
-                        },
-                        ensure_ascii=False,
-                    )
-                )
+            chunk, error = _decode_audio(message)
+            if error is not None:
+                await websocket.send(json.dumps(error))
                 continue
-
-            if len(message) % SAMPLE_BYTES:
-                await websocket.send(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "code": "invalid_audio_size",
-                            "message": "binary audio length must be a multiple of 4 bytes",
-                        },
-                        ensure_ascii=False,
-                    )
+            if asr_client is None:
+                asr_client = factory(
+                    model_type=model_type,
+                    slow_reply_silence_duration_ms=slow_reply_silence_duration_ms,
+                    audio_save_dir=audio_save_dir,
                 )
-                continue
-
-            chunk = np.frombuffer(message, dtype="<f4").astype(np.float32, copy=True)
-            if not np.isfinite(chunk).all():
-                await websocket.send(
-                    json.dumps(
-                        {
-                            "type": "error",
-                            "code": "invalid_audio_value",
-                            "message": "audio samples must be finite float32 values",
-                        },
-                        ensure_ascii=False,
-                    )
+                asr_client._loop = asyncio.get_running_loop()
+                asr_client.on("stt")(send_stt)
+                processor_task = asyncio.create_task(
+                    asr_client.process_audio_chunk(),
+                    name="asr-websocket-audio-processor",
                 )
-                continue
-
-            # Slight overshoots are common after resampling and shouldn't
-            # destabilize VAD or speaker embedding inference.
-            np.clip(chunk, -1.0, 1.0, out=chunk)
             asr_client.enqueue_audio_chunk(chunk, end_ts_ms=time.time() * 1000)
     except websockets.ConnectionClosed:
         pass
     finally:
-        processor_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await processor_task
+        if processor_task is not None:
+            processor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await processor_task
         # VolcAsrWorker.reset() also closes an in-flight upstream session.
-        asr_client.clear()
+        if asr_client is not None:
+            asr_client.clear()
         logger.info("ASR WebSocket disconnected: %s", remote_address)
 
 
@@ -252,6 +289,9 @@ async def serve(
 
     async def handler(websocket: Any) -> None:
         try:
+            if _request_path(websocket) == EMBEDDING_WS_PATH:
+                await handle_embedding_connection(websocket)
+                return
             await handle_connection(
                 websocket,
                 model_type=model_type,
@@ -271,6 +311,7 @@ async def serve(
         process_request=create_http_handler(audio_save_dir),
     ):
         logger.info("ASR WebSocket listening on ws://%s:%d%s", host, port, WS_PATH)
+        logger.info("Speaker embedding available on ws://%s:%d%s", host, port, EMBEDDING_WS_PATH)
         logger.info(
             "ASR recordings available on http://%s:%d%s",
             host,
