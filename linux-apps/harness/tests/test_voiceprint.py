@@ -34,7 +34,10 @@ class VoiceprintTest(unittest.TestCase):
         self.client = VoiceprintClient(self.path)
 
     def test_empty_read_creates_no_database(self):
-        self.assertEqual(self.client.status(), {"profiles": [], "utterances": {}, "error": ""})
+        self.assertEqual(self.client.status(), {
+            "profiles": [], "utterances": {}, "error": "",
+            "sync": {"connected": False, "pending": True, "error": ""},
+        })
         self.assertFalse(Path(self.path).parent.exists())
 
     def test_enrollment_survives_restart_and_coexists_with_chat_history(self):
@@ -75,7 +78,7 @@ class VoiceprintTest(unittest.TestCase):
         for index in range(MAX_SAMPLES + 2):
             self.client.store.add("小明", [1, index / 100, 0])
         self.assertEqual(VoiceprintStore(self.path).summary()[0]["samples"], MAX_SAMPLES)
-        for name in ("", " ", "名" * 41, None):
+        for name in ("", " ", "名" * 41, "小\n明", None):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.client.store.add(name, [1, 0, 0])
 
