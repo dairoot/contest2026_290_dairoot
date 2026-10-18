@@ -35,7 +35,7 @@ sys.path.insert(0, BASE_DIR)  # server.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(BASE_DIR)))  # aichat_sdk
 
 from server import serve
-from session_store import save_session
+from session_store import save_debug_log, save_session
 from skill_install import MAX_OUTPUT_CHARS, install_skill, run_skill_command
 
 from aichat_sdk import ChatBot, DEFAULT_TTS_ENGINE, get_tts_engines
@@ -58,7 +58,8 @@ sdk_mcp.MCP_TOOL_TIMEOUT_SECONDS = 20
 logger = logging.getLogger("web_console")
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-SESSION_DB_PATH = os.path.join(BASE_DIR, "sessions", "history.sqlite3")
+SESSION_DB_PATH = os.path.join(BASE_DIR, "data", "history.sqlite3")
+DEBUG = os.getenv("DEBUG", "false").strip().lower() == "true"
 WEB_HOST = "0.0.0.0"  # 注意：页面能改外部 MCP server 的启动命令（等于能在本机拉进程），绑 0.0.0.0 后同网段都能访问
 WEB_PORT = 8080
 OUTPUT_SAMPLE_RATE = 24000  # 采样率不放到页面上配，扬声器流建一次就一直用
@@ -334,6 +335,7 @@ class AIClient:
         self._session_ended_at: datetime.datetime | None = None
         self._session_id = uuid.uuid4().hex
         self._messages_saved = False
+        self._debug_log_saved = False
         self._play_task: asyncio.Task | None = None
         self._text_tasks: set[asyncio.Task] = set()
         self._output_stream: sd.OutputStream | None = None
@@ -590,35 +592,53 @@ class AIClient:
         self._session_ended_at = None
         self._session_id = uuid.uuid4().hex
         self._messages_saved = False
+        self._debug_log_saved = False
         self._play_task = asyncio.create_task(self.play_audio(chat_bot))
 
     def save_messages(self, chat_bot: ChatBot | None = None) -> str:
         """把这一轮非 system 消息存入 SQLite，返回会话 ID；未写入则返回空串。
 
         会话结束（收到 close）时存一次；没等到 close 就被重启/退出打断的，
-        由 _stop_bot 补存，_messages_saved 保证同一轮只写一次。
+        由 _stop_bot 补存。DEBUG=true 时同时保存完整消息的 JSONL 调试文件；
+        两种存储分别记录成功状态，失败时可独立重试。
         """
         chat_bot = chat_bot or self.chat_bot
-        if chat_bot is None or self._messages_saved:
+        if chat_bot is None or (self._messages_saved and (not DEBUG or self._debug_log_saved)):
             return ""
         messages = chat_bot.llm.messages
         message_count = sum(message.get("role") != "system" for message in messages)
         if not message_count:
             self._messages_saved = True
+            self._debug_log_saved = True
             return ""
 
         if self._session_ended_at is None:
             self._session_ended_at = datetime.datetime.now(datetime.timezone.utc)
         started_at = self._session_started_at or self._session_ended_at
-        try:
-            save_session(SESSION_DB_PATH, self._session_id, started_at, self._session_ended_at, messages)
-        except (OSError, SQLAlchemyError, TypeError, ValueError):  # 存记录失败不该影响会话本身
-            logger.exception("保存会话记录失败")
-            return ""
-        self._messages_saved = True
-        logger.info("[session] 会话记录已保存：%s，id=%s（%d 条 message）",
-                    SESSION_DB_PATH, self._session_id, message_count)
-        return self._session_id
+        saved_session_id = ""
+        if not self._messages_saved:
+            try:
+                save_session(SESSION_DB_PATH, self._session_id, started_at, self._session_ended_at, messages)
+            except (OSError, SQLAlchemyError, TypeError, ValueError):  # 存记录失败不该影响会话本身
+                logger.exception("保存会话记录失败")
+            else:
+                self._messages_saved = True
+                saved_session_id = self._session_id
+                logger.info("[session] 会话记录已保存：%s，id=%s（%d 条 message）",
+                            SESSION_DB_PATH, self._session_id, message_count)
+
+        if DEBUG and not self._debug_log_saved:
+            log_path = os.path.join(
+                os.path.dirname(SESSION_DB_PATH), f"{started_at:%Y%m%d-%H%M%S}-{self._session_id}.jsonl",
+            )
+            try:
+                save_debug_log(log_path, messages)
+            except (OSError, TypeError, ValueError):
+                logger.exception("保存会话调试日志失败")
+            else:
+                self._debug_log_saved = True
+                logger.info("[session] 会话调试日志已保存：%s（%d 条 message）", log_path, len(messages))
+        return saved_session_id
 
     def _sync_mcp_registry(self, new_config: dict) -> None:
         """只注销删掉的和改过的 server（stdio 子进程随之退出）。

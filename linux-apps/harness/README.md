@@ -42,10 +42,17 @@ MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mim
 ## 聊天记录
 
 会话收到结束事件（道别或空闲超时）后，`llm.messages` 中非 `system` 的消息自动保存到
-`sessions/history.sqlite3`。点击“重新开始”、保存配置触发重启或正常退出时，
+`data/history.sqlite3`。点击“重新开始”、保存配置触发重启或正常退出时，
 也会补存尚未保存的会话；只有系统提示词、没有聊天内容的会话不保存。
 数据库及目录在首次保存时自动创建，使用 SQLAlchemy ORM 的 `ChatSession`、
 `ChatMessage` 模型及事务管理。更新代码后执行 `uv sync` 安装 ORM 依赖。
+已有历史记录时，停止 harness 后将旧的 `sessions/` 目录重命名为 `data/`。
+
+`.env` 中的 `DEBUG` 默认是 `false`。设置 `DEBUG=true` 并重启服务后，
+每轮会话还会在 `data/` 下保存一个 `<UTC开始时间>-<会话ID>.jsonl` 调试文件，
+一行一条完整的 `llm.messages` 原始消息，包括 `system`、`tool_calls`、
+`reasoning_content`、`audio_url` 等字段。同秒开始的会话也会各自保留文件。
+关闭 `DEBUG` 仅停止生成新的 JSONL 文件，SQLite 聊天记录照常保存。
 
 `sessions` 表保存唯一会话 ID、UTC 开始时间和结束时间；`messages` 表按
 `session_id`、从 0 开始的连续 `position` 保存角色和原消息的 `content` 值，
@@ -60,11 +67,12 @@ token 用量保存在独立的 JSON 字段 `usage`，没有用量数据时为 SQ
 安装了 SQLite 命令行工具时，可在 harness 目录查询最近的会话：
 
 ```bash
-sqlite3 sessions/history.sqlite3 'SELECT id, started_at, ended_at FROM sessions ORDER BY started_at DESC LIMIT 10;'
-sqlite3 sessions/history.sqlite3 "SELECT content, usage FROM messages WHERE session_id = '会话ID' ORDER BY position;"
+sqlite3 data/history.sqlite3 'SELECT id, started_at, ended_at FROM sessions ORDER BY started_at DESC LIMIT 10;'
+sqlite3 data/history.sqlite3 "SELECT content, usage FROM messages WHERE session_id = '会话ID' ORDER BY position;"
 ```
 
-写入失败会记录错误日志，不打断对话；收到结束事件时保存失败的，会在后续重启或退出时重试。
+数据库和调试文件独立保存，写入失败会记录错误日志，不打断对话；
+收到结束事件时保存失败的，会在后续重启或退出时重试已启用且尚未成功的存储。
 强制杀进程或断电前尚未结束的会话不会补存。
 
 存储与会话生命周期测试（使用临时数据库和模拟 ChatBot，不访问音频设备或外部服务）：
