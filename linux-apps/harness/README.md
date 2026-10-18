@@ -39,6 +39,40 @@ MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mim
 配置中的脚本路径相对于 harness 目录。搬目录前保存的这两个脚本旧路径会在
 启动时自动迁移；保存配置后写入 `config.json`。
 
+## 聊天记录
+
+会话收到结束事件（道别或空闲超时）后，`llm.messages` 中非 `system` 的消息自动保存到
+`sessions/history.sqlite3`。点击“重新开始”、保存配置触发重启或正常退出时，
+也会补存尚未保存的会话；只有系统提示词、没有聊天内容的会话不保存。
+数据库及目录在首次保存时自动创建，使用 SQLAlchemy ORM 的 `ChatSession`、
+`ChatMessage` 模型及事务管理。更新代码后执行 `uv sync` 安装 ORM 依赖。
+
+`sessions` 表保存唯一会话 ID、UTC 开始时间和结束时间；`messages` 表按
+`session_id`、从 0 开始的连续 `position` 保存角色和原消息的 `content` 值，
+过滤所有 `role=system` 的消息。`content` 字符串原样保存，空值或缺省值存为 SQL NULL，
+结构化内容存为 JSON 文本；不再包含外层 `role`、`time`、`tool_calls`、`audio_url` 等字段。
+若原 `content` 是包含 `text`、`time`、`round` 的 JSON 字符串，也会原样保留。
+token 用量保存在独立的 JSON 字段 `usage`，没有用量数据时为 SQL NULL。
+会话和消息在同一事务中写入，同一轮只保存一次。
+录音文件仍由 ASR 服务管理。
+该目录已在 Git 忽略规则中。
+
+安装了 SQLite 命令行工具时，可在 harness 目录查询最近的会话：
+
+```bash
+sqlite3 sessions/history.sqlite3 'SELECT id, started_at, ended_at FROM sessions ORDER BY started_at DESC LIMIT 10;'
+sqlite3 sessions/history.sqlite3 "SELECT content, usage FROM messages WHERE session_id = '会话ID' ORDER BY position;"
+```
+
+写入失败会记录错误日志，不打断对话；收到结束事件时保存失败的，会在后续重启或退出时重试。
+强制杀进程或断电前尚未结束的会话不会补存。
+
+存储与会话生命周期测试（使用临时数据库和模拟 ChatBot，不访问音频设备或外部服务）：
+
+```bash
+uv run python -m unittest -v tests.test_session_store
+```
+
 ## Skills 安装
 
 配置台的 Skills 标题右侧点击“+ 安装”，支持两种方式：
@@ -62,7 +96,7 @@ ZIP 上传会校验路径，拒绝目录穿越、符号链接、重复路径及�
 安装功能测试（使用临时目录及本地模拟命令，不安装真实软件）：
 
 ```bash
-uv run python -m unittest -v test_skill_install
+uv run python -m unittest -v tests.test_skill_install
 ```
 
 ## 扬声器音量 MCP
@@ -97,5 +131,13 @@ uv run python -m unittest -v test_skill_install
 测试（模拟 PulseAudio，不改变实际音量）：
 
 ```bash
-uv run python -m unittest -v test_volume_mcp
+uv run python -m unittest -v tests.test_volume_mcp
+```
+
+## 测试
+
+回归测试集中在 `tests/`，在本目录运行全部测试：
+
+```bash
+uv run python -m unittest discover -v
 ```
