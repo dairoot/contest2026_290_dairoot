@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 
-MIN_ENROLLMENT_SPEECH_MS = 1500
+MIN_ENROLLMENT_SPEECH_MS = 1000
 MAX_SAMPLES_PER_NAME = 10
 
 
