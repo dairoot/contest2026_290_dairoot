@@ -107,7 +107,7 @@ class EnrollmentTests(unittest.IsolatedAsyncioTestCase):
         return self.replies()[-1]
 
     async def test_enroll_selected_message_and_match_future_speech(self):
-        result = await self.add_message()
+        result = await self.add_message(speech_ms=1000)
         self.assertTrue(result["can_enroll"])
         self.assertNotIn("embedding", result)
         reply = await self.enroll(result["id"])
@@ -126,7 +126,7 @@ class EnrollmentTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("embedding", json.dumps(message))
 
     async def test_short_speech_and_invalid_embedding_cannot_be_enrolled(self):
-        for overrides in ({"speech_ms": 1000}, {"embedding": [0, 0, 0]}):
+        for overrides in ({"speech_ms": 999}, {"embedding": [0, 0, 0]}):
             with self.subTest(overrides=overrides):
                 result = await self.add_message(**overrides)
                 self.assertFalse(result["can_enroll"])

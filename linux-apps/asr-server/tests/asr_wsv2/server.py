@@ -136,7 +136,7 @@ async def handle_enrollment(ws, message) -> None:
         if voiceprint_error:
             raise ValueError(voiceprint_error)
         if result_id not in result_embeddings:
-            raise ValueError("这条消息没有可用声纹，请选择有效语音不少于 1.5 秒的消息")
+            raise ValueError("这条消息没有可用声纹，请选择有效语音不少于 1 秒的消息")
         name = voiceprints.validate_name(request.get("name"))
         added = voiceprints.add(name, result_embeddings[result_id])
     except (ValueError, OSError) as exc:

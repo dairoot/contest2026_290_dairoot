@@ -40,7 +40,7 @@ AUDIO_URL_PREFIX = "/audio/"
 DEFAULT_AUDIO_SAVE_DIR = Path(__file__).resolve().parent / "audio_logs"
 SAMPLE_BYTES = np.dtype("<f4").itemsize
 SAMPLE_RATE = 16000
-MIN_EMBEDDING_SAMPLES = SAMPLE_RATE * 1500 // 1000
+MIN_EMBEDDING_SAMPLES = SAMPLE_RATE
 MAX_EMBEDDING_SAMPLES = SAMPLE_RATE * 3
 MAX_PRESET_SAMPLES = 1000
 MAX_PRESET_DIMENSION = 4096
@@ -217,7 +217,7 @@ async def handle_embedding_connection(
             if error is None and audio.size < MIN_EMBEDDING_SAMPLES:
                 error = {
                     "type": "error", "code": "audio_too_short",
-                    "message": "send at least 1.5 seconds of 16 kHz mono Float32LE PCM in one message",
+                    "message": "send at least 1 second of 16 kHz mono Float32LE PCM in one message",
                 }
             if error is not None:
                 await websocket.send(json.dumps(error))

@@ -85,7 +85,7 @@ class EmbeddingWebSocketTests(unittest.IsolatedAsyncioTestCase):
         return json.loads(await asyncio.wait_for(ws.recv(), timeout=2))
 
     def pcm(self):
-        return np.zeros(asr_server.MIN_EMBEDDING_SAMPLES, dtype="<f4").tobytes()
+        return np.zeros(16000, dtype="<f4").tobytes()
 
     async def test_extracts_embedding_only_and_uses_same_three_second_window(self):
         async with websockets.connect(self.url + "/embedding", proxy=None) as ws:
@@ -109,6 +109,7 @@ class EmbeddingWebSocketTests(unittest.IsolatedAsyncioTestCase):
                 (np.array([np.nan], dtype="<f4").tobytes(), "invalid_audio_value"),
                 (b"", "audio_too_short"),
                 (np.zeros(100, dtype="<f4").tobytes(), "audio_too_short"),
+                (np.zeros(15999, dtype="<f4").tobytes(), "audio_too_short"),
             ):
                 with self.subTest(code=code):
                     await ws.send(message)
@@ -176,7 +177,7 @@ class EmbeddingWebSocketTests(unittest.IsolatedAsyncioTestCase):
         self.asr_client.results = [
             {"content": "模拟语句", "embedding": np.array(vector), "speech_ms": duration}
             for vector, duration in (
-                ([1, 0, 0], 500), ([1, 0, 0], 2000), ([0.99, 0.1, 0], 2000),
+                ([1, 0, 0], 999), ([1, 0, 0], 1000), ([0.99, 0.1, 0], 2000),
                 ([0, 1, 0], 2000), ([0.1, 0.99, 0], 2000),
             )
         ]
@@ -254,8 +255,8 @@ class EmbeddingWebSocketTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await self.receive(ws))["speaker"], "speaker_1")
             await self.set_profiles(ws, [{"name": "张三", "embedding": [1, 0, 0]}])
             self.asr_client.results = [
-                {"content": "短句", "embedding": np.array([1, 0, 0]), "speech_ms": 500},
-                {"content": "完整语句", "embedding": np.array([1, 0, 0]), "speech_ms": 2000},
+                {"content": "短句", "embedding": np.array([1, 0, 0]), "speech_ms": 999},
+                {"content": "完整语句", "embedding": np.array([1, 0, 0]), "speech_ms": 1000},
                 {"content": "其他人", "embedding": np.array([0, 1, 0]), "speech_ms": 2000},
             ]
             for expected in ("unknown", "张三", "speaker_2"):

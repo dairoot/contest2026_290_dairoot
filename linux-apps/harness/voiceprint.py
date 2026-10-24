@@ -18,7 +18,7 @@ from aichat_sdk.asr.asr_client import AsrWebSocketClient
 from session_store import Base, _read_database
 
 logger = logging.getLogger("web_console")
-MIN_SPEECH_MS = 1500
+MIN_SPEECH_MS = 1000
 MAX_SAMPLES = 10
 MAX_UTTERANCES = 200
 PROFILE_SYNC_TIMEOUT = 5
@@ -152,10 +152,10 @@ class VoiceprintClient:
         try:
             speech_ms = float(payload.get("speech_ms") or 0)
             if not np.isfinite(speech_ms) or speech_ms < MIN_SPEECH_MS:
-                raise ValueError("需要至少 1.5 秒有效语音，请重新说一句长一些的话")
+                raise ValueError("需要至少 1 秒有效语音，请重新说一句长一些的话")
             vector = normalize(payload.get("embedding"))
         except (ValueError, TypeError):
-            error = "语音不足 1.5 秒或无法提取声纹，请重新说一句长一些的话"
+            error = "语音不足 1 秒或无法提取声纹，请重新说一句长一些的话"
         self.utterances[audio_url] = {
             "vector": vector,
             "speaker": payload.get("speaker") if isinstance(payload.get("speaker"), str) else "",
