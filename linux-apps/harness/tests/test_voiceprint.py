@@ -30,7 +30,7 @@ class VoiceprintTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.path = str(Path(self.temp.name) / "data" / "history.sqlite3")
+        self.path = str(Path(self.temp.name) / "data" / "db.sqlite3")
         self.client = VoiceprintClient(self.path)
 
     def test_empty_read_creates_no_database(self):
@@ -149,7 +149,7 @@ class VoiceprintSdkTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.client = VoiceprintClient(str(Path(self.temp.name) / "history.sqlite3"))
+        self.client = VoiceprintClient(str(Path(self.temp.name) / "db.sqlite3"))
         self.client.store.add("小明", [1, 0, 0])
         self.client.store.add("小红", [0, 1, 0])
         llm = object.__new__(LlmAgent)
