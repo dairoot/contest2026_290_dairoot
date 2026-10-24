@@ -14,6 +14,10 @@
 - GET  /api/events   SSE：把会变的那部分状态和 llm.messages 推给页面，代替轮询
 - GET  /api/sessions?q=...&limit=20&offset=0  从数据库搜索历史会话并分页
 - GET  /api/sessions/{session_id}  从数据库读取会话消息
+- GET  /api/diaries?limit=20&offset=0  AI 日记列表，按日期从新到旧
+- POST /api/diaries/update  唤醒后台马上整理一轮日记和记忆，进度见 status.diary
+- GET  /api/memory   当前长期记忆
+- PUT  /api/memory   保存页面修改的记忆（空串即清空），下次会话生效
 - GET  /audio/...    转发到 ASR 服务上的用户录音（见 get_audio）
 """
 
@@ -155,6 +159,49 @@ def create_app(client) -> Starlette:
             return JSONResponse({"ok": False, "error": "会话不存在"}, status_code=404)
         return JSONResponse({"ok": True, "session": record}, headers={"Cache-Control": "no-store"})
 
+    async def get_diaries(request: Request):
+        try:
+            limit = int(request.query_params.get("limit", "20"))
+            offset = int(request.query_params.get("offset", "0"))
+            if not 1 <= limit <= 100 or offset < 0:
+                raise ValueError("limit 需为 1～100，offset 不能小于 0")
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        try:
+            data = await asyncio.to_thread(client.list_diaries, limit=limit, offset=offset)
+        except (OSError, SQLAlchemyError):
+            logger.exception("查询日记失败")
+            return JSONResponse({"ok": False, "error": "日记暂时不可用，请稍后重试"}, status_code=503)
+        return JSONResponse({"ok": True, **data}, headers={"Cache-Control": "no-store"})
+
+    async def post_diary_update(request: Request):
+        try:
+            state = client.request_diary_update()
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        return JSONResponse({"ok": True, "diary": state})
+
+    async def get_memory(request: Request):
+        try:
+            memory = await asyncio.to_thread(client.get_memory)
+        except (OSError, SQLAlchemyError):
+            logger.exception("读取记忆失败")
+            return JSONResponse({"ok": False, "error": "记忆暂时不可用，请稍后重试"}, status_code=503)
+        return JSONResponse({"ok": True, "memory": memory}, headers={"Cache-Control": "no-store"})
+
+    async def put_memory(request: Request):
+        try:
+            body = await request.json()
+            if not isinstance(body, dict):
+                raise ValueError("请求需要包含 content 的 JSON 对象")
+            memory = await asyncio.to_thread(client.save_memory, body.get("content"))
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        except (OSError, SQLAlchemyError):
+            logger.exception("保存记忆失败")
+            return JSONResponse({"ok": False, "error": "保存记忆失败，请检查数据库"}, status_code=503)
+        return JSONResponse({"ok": True, "memory": memory})
+
     async def get_events(request: Request):
         """状态和新消息的 SSE 流：ChatBot 没有变更回调，服务端自己看着，变了才发一帧。
 
@@ -213,6 +260,10 @@ def create_app(client) -> Starlette:
             Route("/api/events", get_events),
             Route("/api/sessions", get_sessions),
             Route("/api/sessions/{session_id}", get_session),
+            Route("/api/diaries", get_diaries),
+            Route("/api/diaries/update", post_diary_update, methods=["POST"]),
+            Route("/api/memory", get_memory),
+            Route("/api/memory", put_memory, methods=["PUT"]),
             Route("/audio/{path:path}", get_audio),
         ]
     )
