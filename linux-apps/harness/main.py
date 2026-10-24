@@ -60,7 +60,7 @@ sdk_mcp.MCP_TOOL_TIMEOUT_SECONDS = 20
 logger = logging.getLogger("web_console")
 
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-SESSION_DB_PATH = os.path.join(BASE_DIR, "data", "history.sqlite3")
+SESSION_DB_PATH = os.path.join(BASE_DIR, "data", "db.sqlite3")
 DEBUG = os.getenv("DEBUG", "false").strip().lower() == "true"
 WEB_HOST = "0.0.0.0"  # 注意：页面能改外部 MCP server 的启动命令（等于能在本机拉进程），绑 0.0.0.0 后同网段都能访问
 WEB_PORT = 8080

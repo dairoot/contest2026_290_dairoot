@@ -27,7 +27,7 @@ class SessionQueryTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.path = Path(self.temp.name) / "data" / "history.sqlite3"
+        self.path = Path(self.temp.name) / "data" / "db.sqlite3"
         db_path = patch.object(main, "SESSION_DB_PATH", str(self.path))
         db_path.start()
         self.addCleanup(db_path.stop)

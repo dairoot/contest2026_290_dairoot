@@ -61,7 +61,7 @@ class PresetSyncTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.profiles = VoiceprintClient(str(Path(self.temp.name) / "history.sqlite3"))
+        self.profiles = VoiceprintClient(str(Path(self.temp.name) / "db.sqlite3"))
         self.connections = []
         self.results = asyncio.Queue()
 

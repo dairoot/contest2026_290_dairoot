@@ -26,7 +26,7 @@ uv run main.py
 可选择已有姓名补充样本，每人保留最近 10 个不同样本；重复录入同一句不会增加样本。
 聊天区右上角“声纹”可查看姓名、样本数并删除声纹。历史会话和纯文本消息不能录入。
 
-姓名和归一化后的 embedding 保存在 **harness 本机**的 `data/history.sqlite3`，
+姓名和归一化后的 embedding 保存在 **harness 本机**的 `data/db.sqlite3`，
 使用 SQLAlchemy ORM 的 `Voiceprint` 模型及 `voiceprints` 表（`name`、`embeddings`、`updated_at`），
 与聊天记录共用数据库，重启后自动读取。浏览器不保存声纹；ASR 只在当前连接内存中保留预设。
 数据库及当前全部表在首次保存会话或录入声纹时自动创建。
@@ -86,7 +86,7 @@ MiMo 需在 `.env` 配置 `MIMO_API_KEY`，可选 `MIMO_TTS_VOICE`（默认 `mim
 ## 聊天记录
 
 会话收到结束事件（道别或空闲超时）后，`llm.messages` 中非 `system` 的消息自动保存到
-`data/history.sqlite3`。点击“重新开始”、保存配置触发重启或正常退出时，
+`data/db.sqlite3`。点击“重新开始”、保存配置触发重启或正常退出时，
 也会补存尚未保存的会话；只有系统提示词、没有聊天内容的会话不保存。
 数据库及目录在首次保存时自动创建，使用 SQLAlchemy ORM 的 `ChatSession`、
 `ChatMessage` 模型及事务管理。更新代码后执行 `uv sync` 安装 ORM 依赖。
@@ -117,8 +117,8 @@ token 用量保存在独立的 JSON 字段 `usage`，没有用量数据时为 SQ
 安装了 SQLite 命令行工具时，可在 harness 目录查询最近的会话：
 
 ```bash
-sqlite3 data/history.sqlite3 'SELECT id, started_at, ended_at FROM sessions ORDER BY started_at DESC LIMIT 10;'
-sqlite3 data/history.sqlite3 "SELECT time, speaker, content, usage FROM messages WHERE session_id = '会话ID' ORDER BY position;"
+sqlite3 data/db.sqlite3 'SELECT id, started_at, ended_at FROM sessions ORDER BY started_at DESC LIMIT 10;'
+sqlite3 data/db.sqlite3 "SELECT time, speaker, content, usage FROM messages WHERE session_id = '会话ID' ORDER BY position;"
 ```
 
 数据库和调试文件独立保存，写入失败会记录错误日志，不打断对话；
@@ -129,7 +129,7 @@ sqlite3 data/history.sqlite3 "SELECT time, speaker, content, usage FROM messages
 并打开会话查看按顺序保存的消息、开始/结束时间和 token 用量。
 搜索包含用户、助手和工具消息；留空并点击“查询”即可刷新全部会话。
 时间以浏览器本地时区显示，列表按开始时间从新到旧排列，每页 20 个会话。
-查询直接读取 `data/history.sqlite3`，不依赖 `DEBUG` 或 JSONL 文件，也不打断当前对话。
+查询直接读取 `data/db.sqlite3`，不依赖 `DEBUG` 或 JSONL 文件，也不打断当前对话。
 尚未结束、尚未保存的会话仍在实时聊天区查看。
 
 历史查询接口：
