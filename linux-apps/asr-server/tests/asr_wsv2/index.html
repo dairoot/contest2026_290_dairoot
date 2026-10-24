@@ -152,7 +152,7 @@ function appendLine(data) {
   const enroll = document.createElement('button');
   enroll.className = 'enroll';
   enroll.textContent = '添加录入';
-  enroll.title = data.can_enroll ? '使用这条语音录入声纹' : '有效语音不足 1.5 秒或没有有效声纹，请选择较完整的一句话';
+  enroll.title = data.can_enroll ? '使用这条语音录入声纹' : '有效语音不足 1 秒或没有有效声纹，请选择较完整的一句话';
   enroll.addEventListener('click', () => {
     selectedResult = data;
     enrollName.value = '';

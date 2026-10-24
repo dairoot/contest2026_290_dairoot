@@ -32,7 +32,7 @@ uv run tests/asr_wsv2/server.py
 3. 填写姓名，或选择已录入的姓名，点击「保存声纹」。
 
 保存成功后，所选消息立即显示该姓名，后续语音优先与已录入声纹匹配；未匹配时
-继续使用自动分配的 `speaker_N`。有效语音短于 1500 ms 或声纹无效的消息不能录入。
+继续使用自动分配的 `speaker_N`。有效语音短于 1000 ms 或声纹无效的消息不能录入。
 同一姓名最多保留 10 条不同消息的声纹；重复添加同一声纹不增加样本数。
 
 声纹保存在服务目录的 `speaker_profiles/voiceprints.json`，重启自动加载，
@@ -121,7 +121,7 @@ uv run python -m unittest discover -s tests -p 'test_voiceprint_enrollment.py' -
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 本次消息 ID，录入时回传给服务端 |
-| `speaker` | string | 已录入姓名；未匹配时为 `speaker_N`。语音短于 1500 ms 时返回 `unknown` |
+| `speaker` | string | 已录入姓名；未匹配时为 `speaker_N`。语音短于 1000 ms 时返回 `unknown` |
 | `content` | string | ASR 识别文本 |
 | `elapsed` | number | ASR 推理耗时，单位为秒 |
 | `audio_url` | string \| null | 本段录音的 HTTP 地址，GET 即得 16 kHz 单声道 WAV；落盘失败时为 `null` |

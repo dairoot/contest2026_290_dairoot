@@ -44,7 +44,7 @@ SPEAKER_MARGIN = 0.05
 ADD_SAMPLE_THRESHOLD = 0.60
 MAX_SAMPLES_PER_SPEAKER = 10
 # 音频时长低于该阈值的样本，embedding 方差大，不参与匹配也不入库，避免污染 centroid
-MIN_SV_SPEECH_MS = 1500
+MIN_SV_SPEECH_MS = 1000
 UNKNOWN_SPEAKER = "unknown"
 
 

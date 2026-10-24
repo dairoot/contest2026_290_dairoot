@@ -234,7 +234,7 @@ ws://<host>:8086/ws
 | --- | --- | --- |
 | `type` | string | 消息类型，识别结果固定为 `stt`。 |
 | `speaker_id` | string | ASR 模型返回的说话人 ID；模型不提供时为空字符串。 |
-| `speaker` | string | 优先返回匹配的预设姓名；未匹配时返回匿名编号，如 `speaker_1`、`speaker_2`；有效语音不足 1500 ms 时为 `unknown`。 |
+| `speaker` | string | 优先返回匹配的预设姓名；未匹配时返回匿名编号，如 `speaker_1`、`speaker_2`；有效语音不足 1000 ms 时为 `unknown`。 |
 | `content` | string | 本次语音识别得到的文本。 |
 | `audio_url` | string \| null | 本段 WAV 录音的 HTTP 相对地址；录音不在配置目录内时为 `null`。 |
 | `elapsed` | number | ASR 推理耗时，单位为秒。 |
@@ -274,7 +274,7 @@ SDK 与 harness 原样使用返回的 `speaker`，harness 不再进行二次声�
 
 配置消息不会加载语音模型或写入文件，只影响当前连接；客户端负责持久化并在重连后重发。
 预设匹配使用同名样本的 centroid、余弦阈值和次优分差规则，预设样本不会被识别结果自动补充。
-有效语音不足 1.5 秒仍返回 `unknown`；模型维度不同的预设不参与匹配。
+有效语音不足 1 秒仍返回 `unknown`；模型维度不同的预设不参与匹配。
 
 ## 声纹 embedding 接口
 
@@ -286,7 +286,7 @@ SDK 与 harness 原样使用返回的 `speaker`，harness 不再进行二次声�
 ```
 
 输入为 **16 kHz、单声道、Float32 little-endian 裸 PCM**，不含 WAV 头，
-样本范围 `[-1, 1]`。每段至少 1.5 秒，建议 2～3 秒；超过 3 秒时只使用开头
+样本范围 `[-1, 1]`。每段至少 1 秒，建议 2～3 秒；超过 3 秒时只使用开头
 3 秒，与 `AsrClient` 的声纹输入窗口一致。不要把一段音频拆成多条消息上传。
 连接可复用，每条完整音频对应一条 JSON 响应。
 
@@ -312,7 +312,7 @@ asyncio.run(main())
 ```
 
 格式或提取失败时返回 `{"type":"error","code":"...","message":"..."}`，
-不会关闭连接，可修正音频后重试。`audio_too_short` 表示不足 1.5 秒，
+不会关闭连接，可修正音频后重试。`audio_too_short` 表示不足 1 秒，
 `embedding_failed` 表示模型加载、推理或输出验证失败；其他音频格式校验与 `/ws` 一致。
 
 ## 录音 HTTP 接口

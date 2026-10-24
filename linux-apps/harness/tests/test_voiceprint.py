@@ -44,7 +44,7 @@ class VoiceprintTest(unittest.TestCase):
         now = datetime.now(timezone.utc)
         save_session(self.path, "chat-1", now, now, [{"role": "user", "content": "你好"}])
         self.assertEqual(self.client.status()["profiles"], [])
-        self.client.capture(utterance())
+        self.client.capture(utterance(speech_ms=1000))
         self.client.enroll("/audio/one.wav", " 小明 ")
         restarted = VoiceprintClient(self.path)
         restarted.capture(utterance("/audio/two.wav", [0.95, 0.1, 0]))
@@ -83,7 +83,7 @@ class VoiceprintTest(unittest.TestCase):
             self.client.store.add("新名字", [1, 0])
 
     def test_missing_invalid_or_short_embeddings_cannot_be_enrolled(self):
-        for payload in (utterance(speech_ms=1499), utterance(speech_ms=float("nan")),
+        for payload in (utterance(speech_ms=999), utterance(speech_ms=float("nan")),
                         utterance(speech_ms=float("inf")), utterance(embedding=[0, 0, 0]),
                         utterance(embedding=[float("nan"), 0, 0]), utterance(embedding=[[1, 0, 0]]),
                         {"audio_url": "/audio/one.wav"}):
