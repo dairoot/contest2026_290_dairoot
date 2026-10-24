@@ -64,7 +64,7 @@ class VoiceprintStore:
                             raise ValueError("声纹样本维度不一致或为空")
                         profiles[record.name] = vectors
         except (OSError, SQLAlchemyError, ValueError, TypeError):
-            self.error = "读取声纹数据库失败，请检查 data/history.sqlite3"
+            self.error = "读取声纹数据库失败，请检查 data/db.sqlite3"
             logger.exception(self.error)
         self._profiles = profiles
 
