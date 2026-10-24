@@ -87,6 +87,35 @@ def save_debug_log(path: str, messages: list[dict]) -> None:
 
 
 @contextmanager
+def _write_database(path: str):
+    """写事务：按需建目录和当前全部表，BEGIN IMMEDIATE 开始即持有写锁；正常退出提交，异常回滚。"""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    engine = create_engine(
+        URL.create("sqlite+pysqlite", database=path),
+        json_serializer=lambda value: json.dumps(value, ensure_ascii=False, default=str),
+    )
+
+    @event.listens_for(engine, "connect")
+    def connect(dbapi_connection, connection_record):
+        # BEGIN 交给下面的 begin 事件发出；PRAGMA 要在事务外执行。
+        dbapi_connection.isolation_level = None
+        with closing(dbapi_connection.cursor()) as cursor:
+            cursor.execute("PRAGMA foreign_keys = ON")
+
+    @event.listens_for(engine, "begin")
+    def begin(connection):
+        # pysqlite 默认到第一条写语句才开事务，先读后写的检查会被其他写入插队。
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+    try:
+        Base.metadata.create_all(engine)
+        with Session(engine) as session, session.begin():
+            yield session
+    finally:
+        engine.dispose()
+
+
+@contextmanager
 def _read_database(path: str):
     """查询使用只读连接；尚未保存过会话时不创建数据库或目录。"""
     database = Path(path).resolve()
@@ -174,20 +203,5 @@ def save_session(
             for position, message in enumerate(messages)
         ],
     )
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(
-        URL.create("sqlite+pysqlite", database=path),
-        json_serializer=lambda value: json.dumps(value, ensure_ascii=False, default=str),
-    )
-
-    @event.listens_for(engine, "connect")
-    def enable_foreign_keys(dbapi_connection, connection_record):
-        with closing(dbapi_connection.cursor()) as cursor:
-            cursor.execute("PRAGMA foreign_keys = ON")
-
-    try:
-        Base.metadata.create_all(engine)
-        with Session(engine) as session, session.begin():
-            session.add(record)
-    finally:
-        engine.dispose()
+    with _write_database(path) as session:
+        session.add(record)

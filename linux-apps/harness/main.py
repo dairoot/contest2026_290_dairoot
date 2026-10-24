@@ -1,7 +1,8 @@
 """带 web 配置台的语音对话 demo（在 tests/test_run_v2.py 基础上加了 web 配置和查看）。
 
 音频照旧走本机：麦克风 sd.InputStream → ChatBot，TTS 音频 → sd.OutputStream；
-web 页面提供配置、聊天记录和声纹录入；声纹保存在 harness 本机数据库。
+web 页面提供配置、聊天记录、声纹录入和 AI 日记；声纹保存在 harness 本机数据库。
+后台每小时把新保存的会话整理成日记并更新长期记忆（见 diary.py），新会话开始时把记忆接在人设后面。
 
 启动：python examples/web/main.py，然后打开 http://127.0.0.1:8080
 """
@@ -34,6 +35,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE_DIR)  # server.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(BASE_DIR)))  # aichat_sdk
 
+import diary
 from server import serve
 from session_store import get_session, query_sessions, save_debug_log, save_session
 from skill_install import MAX_OUTPUT_CHARS, install_skill, run_skill_command
@@ -67,6 +69,8 @@ WEB_PORT = 8080
 OUTPUT_SAMPLE_RATE = 24000  # 采样率不放到页面上配，扬声器流建一次就一直用
 DEFAULT_SPEAKER_VOLUME = 80  # 启动时把扬声器拉到这个音量；之后由「音量」MCP 按对话调整
 PIP_INSTALL_TIMEOUT = 300  # 秒；pip 卡在网络上别让「安装中」永远转下去
+DIARY_FIRST_DELAY = 60  # 秒；启动后先等一会儿再整理日记，避开板上的启动高峰
+DIARY_INTERVAL = 3600  # 秒；之后每小时把新保存的会话整理进日记和记忆
 
 DEFAULT_CONFIG = {
     "tts_engine": DEFAULT_TTS_ENGINE,
@@ -371,6 +375,11 @@ class AIClient:
         self._lock = asyncio.Lock()
         self._skill_install_lock = asyncio.Lock()
         self.skill_install_state = {"running": False, "output": "", "error": ""}
+        # 整理状态走 SSE 推给页面；每次整体替换，变化才能被比较出来。
+        self.diary_state = {"running": False, "finished_at": "", "error": "", "dates": [],
+                            "sessions": 0, "pending": 0, "skipped": 0}
+        self._diary_wakeup = asyncio.Event()  # 页面点「立即整理」时唤醒后台循环
+        self._diary_task: asyncio.Task | None = None
 
     # ---------------- web 层用到的接口 ----------------
 
@@ -384,6 +393,28 @@ class AIClient:
     def get_session(self, session_id: str) -> dict | None:
         return get_session(SESSION_DB_PATH, session_id)
 
+    def list_diaries(self, *, limit: int = 20, offset: int = 0) -> dict:
+        return diary.list_diaries(SESSION_DB_PATH, limit=limit, offset=offset)
+
+    def get_memory(self) -> dict:
+        return diary.get_memory(SESSION_DB_PATH)
+
+    def save_memory(self, content) -> dict:
+        """页面修改的记忆：统一换行、去掉首尾空白后覆盖保存，空串即清空；下次会话生效。"""
+        if not isinstance(content, str):
+            raise ValueError("记忆内容必须是字符串")
+        content = content.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if len(content) > diary.MEMORY_LIMIT:
+            raise ValueError(f"记忆不能超过 {diary.MEMORY_LIMIT} 字")
+        return diary.save_memory(SESSION_DB_PATH, content)
+
+    def request_diary_update(self) -> dict:
+        """页面点「立即整理」：唤醒后台循环马上整理一轮，结果随 status.diary 推给页面。"""
+        if self.diary_state["running"]:
+            raise ValueError("正在整理日记，请稍候")
+        self._diary_wakeup.set()
+        return dict(self.diary_state)
+
     def live_status(self) -> dict:
         """会话跑着自己就会变的那几项，走 SSE 推给页面。"""
         return {
@@ -396,6 +427,7 @@ class AIClient:
             "compression": self.compression_status(),
             "skill_install": dict(self.skill_install_state),
             "voiceprints": self.voiceprints.status(),
+            "diary": dict(self.diary_state),
         }
 
     def status(self) -> dict:
@@ -597,6 +629,12 @@ class AIClient:
         if self.last_error:
             logger.error(self.last_error)
             return
+        # 长期记忆接在人设后面烘进系统提示词；读不出来只记日志，这轮会话照常开始。
+        try:
+            memory = await asyncio.to_thread(diary.load_memory, SESSION_DB_PATH)
+        except (OSError, SQLAlchemyError):
+            logger.exception("读取长期记忆失败，本轮会话不带记忆")
+            memory = ""
         # 技能是建 LlmAgent 时扫 SKILLS_DIR 烘进系统提示词的，这里同步扫一份给页面渲染开关；
         # 停用的不传给 AgentInfo.skills，模型就看不到它
         self.skills = load_skills()
@@ -611,7 +649,7 @@ class AIClient:
                 send_idle_farewell=config["send_idle_farewell"],
                 user_info=DeviceInfo(timezone=config["timezone"], city=config["city"]),
                 agent_info=AgentInfo(
-                    soul=config["soul"],
+                    soul=diary.memory_soul(config["soul"], memory),
                     mcp=effective_mcp(config["mcp"]),
                     skills=enabled_skills,
                     tool_thinking=config["tool_thinking"],
@@ -715,6 +753,44 @@ class AIClient:
                 # 先停止 SDK 内仍在生成回复的任务，再保存最终消息。
                 self.save_messages(chat_bot)
 
+    # ---------------- AI 日记 ----------------
+
+    async def update_diary(self) -> None:
+        """整理一轮日记和记忆，结果写进 diary_state；失败只记录，不抛出。"""
+        self.diary_state = {**self.diary_state, "running": True, "error": ""}
+        result, error = {}, ""
+        try:
+            result = await diary.update(SESSION_DB_PATH, timezone=self.config["timezone"], soul=self.config["soul"])
+        except ValueError as exc:  # 未配置模型、模型返回空内容等，原因可以直接给页面看
+            error = str(exc)
+            logger.warning("整理日记失败：%s", error)
+        except Exception:  # 网络、鉴权、数据库等：原始异常只进日志，不在页面暴露
+            error = "整理日记失败，详见服务日志"
+            logger.exception("整理日记失败")
+        finally:
+            self.diary_state = {
+                "running": False,
+                "finished_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "error": error,
+                "dates": result.get("dates", []),
+                **{key: result.get(key, 0) for key in ("sessions", "pending", "skipped")},
+            }
+
+    async def _diary_loop(self) -> None:
+        """启动 DIARY_FIRST_DELAY 秒后整理第一轮，之后每 DIARY_INTERVAL 秒或页面点「立即整理」时一轮。
+
+        只有这一个任务执行整理，轮次不会重叠；LLM 走异步请求，退出时取消任务即可。
+        """
+        delay = DIARY_FIRST_DELAY
+        while True:
+            try:
+                await asyncio.wait_for(self._diary_wakeup.wait(), delay)
+            except asyncio.TimeoutError:
+                pass
+            self._diary_wakeup.clear()
+            await self.update_diary()
+            delay = DIARY_INTERVAL
+
     # ---------------- 音频 ----------------
 
     async def play_audio(self, chat_bot: ChatBot):
@@ -795,10 +871,14 @@ class AIClient:
         self._output_stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype=np.int16)
         self._output_stream.start()
         try:
+            self._diary_task = asyncio.create_task(self._diary_loop())
             await self.restart()  # 拾音流在里面按配置开，换设备保存后一起重开
             print(f"web 配置台: http://{WEB_HOST}:{WEB_PORT}    聆听中... (Ctrl+C 退出)")
             await serve(self, WEB_HOST, WEB_PORT)
         finally:
+            if self._diary_task is not None:
+                self._diary_task.cancel()
+                await asyncio.gather(self._diary_task, return_exceptions=True)
             async with self._lock:
                 await self._stop_bot()
             self._close_input_stream()

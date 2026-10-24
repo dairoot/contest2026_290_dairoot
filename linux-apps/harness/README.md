@@ -12,7 +12,7 @@ uv sync
 uv run main.py
 ```
 
-[`.env.example`](.env.example) 包含 ASR 地址、LLM 和各 TTS 后端配置。对话与看摄像头共用 `OPENAI_MODEL`。
+[`.env.example`](.env.example) 包含 ASR 地址、LLM 和各 TTS 后端配置。对话、看摄像头和 AI 日记共用 `OPENAI_MODEL`。
 `main.py` 自动读取 `.env` 并覆盖同名进程环境变量，修改后重启服务生效。
 
 配置台位于 `http://<板子 IP>:8080`。以可访问板上麦克风和桌面音频服务的用户运行，
@@ -145,6 +145,75 @@ sqlite3 data/db.sqlite3 "SELECT time, speaker, content, usage FROM messages WHER
 
 ```bash
 uv run python -m unittest -v tests.test_session_store tests.test_session_query
+```
+
+## AI 日记与记忆
+
+harness 启动 1 分钟后整理第一轮，之后每小时一轮：读取 `data/db.sqlite3` 中已保存、尚未整理的会话，
+用 `.env` 中与对话相同的模型（`OPENAI_*`）为每天写一篇第一人称日记，并更新一份长期记忆。
+新会话开始时（包括唤醒词触发的重新开始），最新记忆以 `<memory>` 块接在人设后面写进系统提示词，
+可在实时聊天区展开系统提示词查看；`config.json` 中的人设不变。进行中的会话尚未保存，不会被整理，
+所以记忆最多滞后一轮；需要马上生效时在配置台点「立即整理」，再开始新会话。实现见 [`diary.py`](diary.py)。
+
+- 日期按 `config.json` 的时区划分，同一天的新会话合并进当天日记。
+- 说话人姓名来自 ASR 声纹匹配的 `speaker`：已录入的姓名原样使用（`小明：…`）；
+  `speaker_N` 编号只在一次连接内有效，和 `unknown`、打字消息一样写作「用户」。
+  记忆按人一行，如 `- 小明：喜欢喝美式`，全家共同的写 `- 家里：…`。注入时说明按人条目对应
+  消息 `speaker` 中的真实姓名，认不出说话人时不把对方当成记忆里的某个人。
+  录入声纹之前的对话记在「用户」下，不会自动改到姓名下。
+- 记忆只记明确说过的长期信息和带日期的近期安排；不记寒暄、一次性查询、对助手的指令，
+  以及密码、验证码、证件号、银行卡号等敏感信息。对助手的长期要求请写在人设里。
+
+配置台聊天区的「日记」按钮打开面板：查看、修改或清空记忆（最多 2000 字，保存后下次会话生效），
+按日期从新到旧查看日记，点「立即整理」马上整理一轮，整理状态随 SSE 实时更新。
+
+整理规则：
+
+- 没有任何用户发言的会话（误唤醒、只有道别）只打标记，不调用模型。
+- 每轮最多处理 10 块（每块约 12000 字转写，单条消息最多 300 字），积压的留到下一轮。
+- 模型拒绝某块（HTTP 400，例如内容审核）时跳过该块继续后面的，下一轮重试；
+  网络、鉴权、超时等错误停止本轮，已完成的部分保留，下一轮重试。
+- 模型调用期间在页面修改了记忆，本块放弃，下一轮以页面保存的记忆为基础重新整理。
+- 未配置 `OPENAI_API_KEY` 时，只有存在待整理会话才报错；错误显示在日记面板，详细原因见服务日志。
+
+harness 运行时通常不需要手动整理；需要单独跑一轮时，在本目录执行下面的命令。
+它读取同一个 `.env` 和 `config.json`，与 harness 同时整理时冲突的部分留到下一轮：
+
+```bash
+uv run diary.py
+```
+
+数据保存在 `data/db.sqlite3` 的三张表，首次整理或保存记忆时自动创建，不迁移已有表：
+
+| 表 | 内容 |
+| --- | --- |
+| `diaries` | `date`（本地 `YYYY-MM-DD`）、`content`、`updated_at` |
+| `memory` | 单行当前记忆：`content`、`source`（`diary` 自动整理 / `manual` 页面修改）、`updated_at` |
+| `diary_sessions` | 已整理的 `session_id` 及写入的日记日期；没有用户发言的会话日期为空 |
+
+```bash
+sqlite3 data/db.sqlite3 'SELECT date, content FROM diaries ORDER BY date DESC LIMIT 7;'
+sqlite3 data/db.sqlite3 'SELECT content, source, updated_at FROM memory;'
+```
+
+对话转写会发给 `.env` 配置的同一个 LLM 服务；配置台没有鉴权，同网段都能查看和修改日记与记忆。
+
+日记接口：
+
+- `GET /api/diaries?limit=20&offset=0`：返回 `diaries`（每项含 `date`、`content`、`updated_at`、`session_count`）、
+  `total`、`limit` 和 `offset`；`limit` 为 1～100，`offset` 为非负整数。
+- `GET /api/memory` / `PUT /api/memory`：读取或保存当前记忆 `content`、`source`、`updated_at`；
+  `PUT` 的请求体为 `{"content":"..."}`，去掉首尾空白后最多 2000 字，空串即清空。
+- `POST /api/diaries/update`：唤醒后台立即整理一轮，整理中返回 400。
+- `GET /api/state` 和 `/api/events` 的 `status.diary`：`running`、`finished_at`、`error`、`dates`、
+  `sessions`、`pending`、`skipped`。
+
+数据库尚不存在时查询返回空结果、不创建文件；数据库不可读时返回 503，详细原因记录在服务日志。
+
+测试（临时数据库与模拟 LLM，不访问网络、音频或真实模型）：
+
+```bash
+uv run python -m unittest -v tests.test_diary
 ```
 
 ## Skills 安装
