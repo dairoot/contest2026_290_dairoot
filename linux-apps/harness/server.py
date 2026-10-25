@@ -1,6 +1,7 @@
-"""web 配置台的 HTTP 层：配置台和日记两个页面、配置与安装接口、一个录音代理。
+"""web 配置台的 HTTP 层：配置台、历史会话和日记页面、配置与安装接口、一个录音代理。
 
 - GET  /             页面
+- GET  /history      历史会话页面：搜索、按日期筛选及查看会话消息
 - GET  /diary        AI 日记页面：月历查看日记、编辑长期记忆
 - GET  /api/config   当前配置 + SDK 的 TTS 引擎目录 + 麦克风列表（页面加载时填表单，之后不再轮询，免得覆盖正在编辑的内容）
 - POST /api/config   保存配置并按新配置重建 ChatBot
@@ -13,7 +14,7 @@
 - POST /api/skills/command  执行技能安装命令，输出通过 SSE 推送
 - GET  /api/state    完整状态 + llm.messages（页面加载、保存配置、重启后各取一次）
 - GET  /api/events   SSE：把会变的那部分状态和 llm.messages 推给页面，代替轮询
-- GET  /api/sessions?q=...&limit=20&offset=0  从数据库搜索历史会话并分页
+- GET  /api/sessions?q=...&date=YYYY-MM-DD&limit=20&offset=0  从数据库搜索历史会话并分页
 - GET  /api/sessions/{session_id}  从数据库读取会话消息
 - GET  /api/diaries?month=YYYY-MM  某月的日记（按日期升序）及全部日记的日期范围
 - POST /api/diaries/update  唤醒后台马上整理一轮日记和记忆，进度见 status.diary
@@ -24,6 +25,7 @@
 
 import asyncio
 import contextlib
+import datetime
 import json
 import logging
 import os
@@ -42,6 +44,7 @@ from aichat_sdk.config import ASR_SERVER_WS_URL
 from skill_install import MAX_UPLOAD_BYTES
 
 INDEX_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+HISTORY_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.html")
 DIARY_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diary.html")
 MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")  # 日记页按月查询，YYYY-MM
 EVENT_INTERVAL = 0.5  # 秒；SSE 每隔这么久看一眼状态变没变
@@ -140,6 +143,14 @@ def create_app(client) -> Starlette:
             limit = int(request.query_params.get("limit", "20"))
             offset = int(request.query_params.get("offset", "0"))
             query = request.query_params.get("q", "").strip()
+            date = request.query_params.get("date", "")
+            if date:
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+                    raise ValueError("date 需为 YYYY-MM-DD 格式的日期")
+                try:
+                    datetime.date.fromisoformat(date)
+                except ValueError:
+                    raise ValueError("date 需为有效日期") from None
             if not 1 <= limit <= 100 or offset < 0:
                 raise ValueError("limit 需为 1～100，offset 不能小于 0")
             if len(query) > 200:
@@ -147,7 +158,7 @@ def create_app(client) -> Starlette:
         except ValueError as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         try:
-            data = await asyncio.to_thread(client.query_sessions, query=query, limit=limit, offset=offset)
+            data = await asyncio.to_thread(client.query_sessions, query=query, date=date, limit=limit, offset=offset)
         except (OSError, SQLAlchemyError, ValueError):
             logger.exception("查询历史会话失败")
             return JSONResponse({"ok": False, "error": "聊天记录暂时不可用，请稍后重试"}, status_code=503)
@@ -162,6 +173,9 @@ def create_app(client) -> Starlette:
         if record is None:
             return JSONResponse({"ok": False, "error": "会话不存在"}, status_code=404)
         return JSONResponse({"ok": True, "session": record}, headers={"Cache-Control": "no-store"})
+
+    async def history_page(request: Request):
+        return FileResponse(HISTORY_HTML)
 
     async def diary_page(request: Request):
         return FileResponse(DIARY_HTML)
@@ -263,6 +277,7 @@ def create_app(client) -> Starlette:
             Route("/api/events", get_events),
             Route("/api/sessions", get_sessions),
             Route("/api/sessions/{session_id}", get_session),
+            Route("/history", history_page),
             Route("/diary", diary_page),
             Route("/api/diaries", get_diaries),
             Route("/api/diaries/update", post_diary_update, methods=["POST"]),

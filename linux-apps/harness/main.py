@@ -387,8 +387,9 @@ class AIClient:
         """给页面的配置：附 SDK 引擎目录和当前麦克风列表。"""
         return {**self.config, "tts_engines": get_tts_engines(), "mics": input_devices()}
 
-    def query_sessions(self, *, query: str = "", limit: int = 20, offset: int = 0) -> dict:
-        return query_sessions(SESSION_DB_PATH, query=query, limit=limit, offset=offset)
+    def query_sessions(self, *, query: str = "", date: str = "", limit: int = 20, offset: int = 0) -> dict:
+        return query_sessions(SESSION_DB_PATH, query=query, date=date, timezone=self.config["timezone"],
+                              limit=limit, offset=offset)
 
     def get_session(self, session_id: str) -> dict | None:
         return get_session(SESSION_DB_PATH, session_id)

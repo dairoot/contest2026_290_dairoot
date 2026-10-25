@@ -266,6 +266,27 @@
       "collection_mode": "cli",
       "health": "ok",
       "model": "claude-opus-5-5"
+    },
+    {
+      "session_id": "01a171ac-7b02-72a0-8df8-969d3fd682bc",
+      "tool": "codex",
+      "started_at": "2026-10-25T06:08:14.454Z",
+      "last_event_at": "2026-10-25T06:15:42.786Z",
+      "event_count": 73,
+      "raw_event_count": 263,
+      "file_path": "logs/dairoot/2026-10-25/codex__01a171ac-7b02-72a0-8df8-969d3fd682bc.jsonl",
+      "collection_mode": "cli",
+      "source_interface": "codex-desktop",
+      "health": "ok",
+      "model": "gpt-6-astra",
+      "redacted_count_total": 0,
+      "format_adapter": "codex-response-item-to-contest-v1",
+      "collector_revision": "open-vela/.claude@ac36068f8571b2cced14c5f23f6cebb47026d1c6",
+      "source_file": "rollout-2026-10-25T14-08-11-01a171ac-7b02-72a0-8df8-969d3fd682bc.jsonl",
+      "source_snapshot_sha256": "768de2415d2c11d68d07bbcdcac573637584f94d1200b3ea09de5c786029745d",
+      "snapshot_through_line": 263,
+      "omitted_binary_payloads": 2,
+      "export_scope": "Real user/assistant dialogue and tool calls/results through the user submission request. Excludes injected configuration, internal reasoning, runtime records and screenshot image bytes. Text is preserved without truncation and written with official snapshot_core@1.3.0 redaction and JSONL serialization."
     }
   ],
   "updated_at": "2026-10-25T06:18:40.369703+00:00"
