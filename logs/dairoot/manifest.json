@@ -254,7 +254,19 @@
       "redacted_count_total": 0,
       "health": "degraded",
       "data_completeness_warning": "Official Codex snapshot adapter exports user/assistant text; tool and runtime records are omitted."
+    },
+    {
+      "session_id": "f219d67f-2851-47ce-b7d5-e8c43472430d",
+      "tool": "claude-code",
+      "started_at": "2026-10-24T05:11:48.805Z",
+      "last_event_at": "2026-10-25T06:18:40.295Z",
+      "event_count": 1151,
+      "raw_event_count": 2153,
+      "file_path": "logs/dairoot/2026-10-25/claude-code__f219d67f-2851-47ce-b7d5-e8c43472430d.jsonl",
+      "collection_mode": "cli",
+      "health": "ok",
+      "model": "claude-opus-5-5"
     }
   ],
-  "updated_at": "2026-10-18T10:52:30.116Z"
+  "updated_at": "2026-10-25T06:18:40.369703+00:00"
 }
