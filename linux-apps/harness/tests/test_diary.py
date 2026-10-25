@@ -184,7 +184,7 @@ class UpdateTest(unittest.IsolatedAsyncioTestCase):
         with closing(sqlite3.connect(self.path)) as connection:
             connection.executescript("DROP TABLE diaries; DROP TABLE memory; DROP TABLE diary_sessions;")
         self.assertEqual(diary.load_memory(str(self.path)), "")
-        self.assertEqual(diary.list_diaries(str(self.path))["diaries"], [])
+        self.assertEqual(diary.list_diaries(str(self.path), "2026-10")["diaries"], [])
         await self.run_update()
         self.assertEqual(self.query("SELECT session_id FROM diary_sessions"), [("old",)])
 
@@ -278,7 +278,7 @@ class UpdateTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.run_update(), {"dates": [], "sessions": 1, "pending": 0, "skipped": 0})
         self.assertEqual(self.llm.calls, [])
         self.assertEqual(self.query("SELECT session_id, date FROM diary_sessions"), [("wake", None)])
-        self.assertEqual(diary.list_diaries(str(self.path))["diaries"], [])
+        self.assertEqual(diary.list_diaries(str(self.path), "2026-10")["diaries"], [])
 
     async def test_empty_memory_output_keeps_existing_memory(self):
         save(self.path, "a", "2026-10-24T01:00:00+00:00", [said("今天天气怎么样")])
@@ -328,24 +328,23 @@ class ReadWriteTest(unittest.TestCase):
         path = str(self.path)
         self.assertEqual(diary.get_memory(path), {"content": "", "source": "", "updated_at": ""})
         self.assertEqual(diary.load_memory(path), "")
-        self.assertEqual(diary.list_diaries(path), {"diaries": [], "total": 0, "limit": 20, "offset": 0})
+        self.assertEqual(diary.list_diaries(path, "2026-10"), {"month": "2026-10", "diaries": [], "first": "", "last": ""})
         self.assertFalse(self.path.parent.exists())
 
-    def test_list_diaries_newest_first_with_session_counts(self):
+    def test_list_diaries_by_month_with_session_counts_and_range(self):
         for session_id in "abc":
             save(self.path, session_id, "2026-10-24T01:00:00+00:00", [said("你好")])
         with _write_database(str(self.path)) as session:
-            session.add_all([diary.DiaryEntry(date=f"2026-10-2{day}", content=f"第{day}天", updated_at="t")
-                             for day in (2, 3, 4)])
+            session.add_all([diary.DiaryEntry(date=date, content=f"{date} 的日记", updated_at="t")
+                             for date in ("2026-09-30", "2026-10-24", "2026-10-03", "2026-11-01")])
             session.add_all([diary.DiarySession(session_id="a", date="2026-10-24"),
                              diary.DiarySession(session_id="b", date="2026-10-24"),
                              diary.DiarySession(session_id="c", date=None)])
-        data = diary.list_diaries(str(self.path), limit=2)
-        self.assertEqual(data["total"], 3)
+        data = diary.list_diaries(str(self.path), "2026-10")
+        self.assertEqual((data["month"], data["first"], data["last"]), ("2026-10", "2026-09-30", "2026-11-01"))
         self.assertEqual([(row["date"], row["content"], row["session_count"]) for row in data["diaries"]],
-                         [("2026-10-24", "第4天", 2), ("2026-10-23", "第3天", 0)])
-        page = diary.list_diaries(str(self.path), limit=2, offset=2)
-        self.assertEqual([row["date"] for row in page["diaries"]], ["2026-10-22"])
+                         [("2026-10-03", "2026-10-03 的日记", 0), ("2026-10-24", "2026-10-24 的日记", 2)])
+        self.assertEqual(diary.list_diaries(str(self.path), "2026-12")["diaries"], [])
 
     def test_save_memory_overwrites_and_clears(self):
         path = str(self.path)
@@ -525,31 +524,38 @@ class DiaryHttpTest(unittest.TestCase):
         self.web.__enter__()
         self.addCleanup(self.web.__exit__, None, None, None)
 
+    def test_diary_page_is_served_and_linked_from_console(self):
+        response = self.web.get("/diary")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/html"))
+        self.assertIn("<title>AI 日记", response.text)
+        self.assertIn('href="/diary"', self.web.get("/").text)
+
     def test_missing_database_returns_empty_without_files(self):
-        response = self.web.get("/api/diaries")
+        response = self.web.get("/api/diaries", params={"month": "2026-10"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["cache-control"], "no-store")
-        self.assertEqual(response.json(), {"ok": True, "diaries": [], "total": 0, "limit": 20, "offset": 0})
+        self.assertEqual(response.json(), {"ok": True, "month": "2026-10", "diaries": [], "first": "", "last": ""})
         response = self.web.get("/api/memory")
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(response.json(), {"ok": True, "memory": {"content": "", "source": "", "updated_at": ""}})
         self.assertIn("diary", self.web.get("/api/state").json()["status"])
         self.assertFalse(self.path.parent.exists())
 
-    def test_diary_list_is_paginated_and_validated(self):
+    def test_diaries_are_queried_by_valid_month(self):
         save(self.path, "a", "2026-10-24T01:00:00+00:00", [said("你好")])
         with _write_database(str(self.path)) as session:
-            session.add_all([diary.DiaryEntry(date=f"2026-10-2{day}", content=f"第{day}天", updated_at="t")
-                             for day in (3, 4)])
+            session.add_all([diary.DiaryEntry(date=date, content=f"{date} 的日记", updated_at="t")
+                             for date in ("2026-09-30", "2026-10-24")])
             session.add(diary.DiarySession(session_id="a", date="2026-10-24"))
-        data = self.web.get("/api/diaries", params={"limit": 1}).json()
-        self.assertEqual((data["total"], data["limit"], data["offset"]), (2, 1, 0))
-        self.assertEqual(data["diaries"], [{"date": "2026-10-24", "content": "第4天", "updated_at": "t", "session_count": 1}])
-        page = self.web.get("/api/diaries", params={"limit": 1, "offset": 1}).json()
-        self.assertEqual([row["date"] for row in page["diaries"]], ["2026-10-23"])
-        for params in ({"limit": 0}, {"limit": 101}, {"offset": -1}, {"limit": "x"}):
-            with self.subTest(params=params):
-                response = self.web.get("/api/diaries", params=params)
+        data = self.web.get("/api/diaries", params={"month": "2026-10"}).json()
+        self.assertEqual(data, {
+            "ok": True, "month": "2026-10", "first": "2026-09-30", "last": "2026-10-24",
+            "diaries": [{"date": "2026-10-24", "content": "2026-10-24 的日记", "updated_at": "t", "session_count": 1}],
+        })
+        for month in (None, "", "2026-1", "2026-13", "2026-00", "202610", "2026-10-01", "2026_10"):
+            with self.subTest(month=month):
+                response = self.web.get("/api/diaries", params={} if month is None else {"month": month})
                 self.assertEqual(response.status_code, 400)
                 self.assertFalse(response.json()["ok"])
 
@@ -578,7 +584,7 @@ class DiaryHttpTest(unittest.TestCase):
         self.path.parent.mkdir(parents=True)
         self.path.write_bytes(b"not a database" * 100)
         with self.assertLogs("web_console", level="ERROR"):
-            self.assertEqual(self.web.get("/api/diaries").status_code, 503)
+            self.assertEqual(self.web.get("/api/diaries", params={"month": "2026-10"}).status_code, 503)
             self.assertEqual(self.web.get("/api/memory").status_code, 503)
             self.assertEqual(self.web.put("/api/memory", json={"content": "x"}).status_code, 503)
 

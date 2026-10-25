@@ -393,8 +393,8 @@ class AIClient:
     def get_session(self, session_id: str) -> dict | None:
         return get_session(SESSION_DB_PATH, session_id)
 
-    def list_diaries(self, *, limit: int = 20, offset: int = 0) -> dict:
-        return diary.list_diaries(SESSION_DB_PATH, limit=limit, offset=offset)
+    def list_diaries(self, month: str) -> dict:
+        return diary.list_diaries(SESSION_DB_PATH, month)
 
     def get_memory(self) -> dict:
         return diary.get_memory(SESSION_DB_PATH)
