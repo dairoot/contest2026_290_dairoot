@@ -57,6 +57,64 @@ class SessionQueryTest(unittest.TestCase):
         self.assertEqual(self.web.get("/api/sessions/unknown").status_code, 404)
         self.assertFalse(self.path.parent.exists())
 
+    def test_history_page_is_available_without_starting_chat(self):
+        response = self.web.get("/history?date=2026-10-18")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("<title>历史会话", response.text)
+        self.assertIn('id="history-date"', response.text)
+        self.assertNotIn("<dialog", response.text)
+        self.assertIsNone(self.client.chat_bot)
+        self.assertFalse(self.path.parent.exists())
+
+    def test_date_filter_uses_config_timezone_and_start_time(self):
+        boundary = datetime.datetime(2026, 10, 17, 16, tzinfo=datetime.timezone.utc)
+        for session_id, started_at in (
+            ("previous", boundary - datetime.timedelta(microseconds=1)),
+            ("midnight", boundary),
+            ("late", boundary + datetime.timedelta(days=1, microseconds=-1)),
+            ("next", boundary + datetime.timedelta(days=1)),
+        ):
+            self.save(session_id, [{"role": "user", "content": "当天对话"}], started_at)
+        self.client.config["timezone"] = 8
+        response = self.web.get("/api/sessions", params={"date": "2026-10-18"})
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total"], 2)
+        self.assertEqual([row["id"] for row in data["sessions"]], ["late", "midnight"])
+        self.client.config["timezone"] = 0
+        data = self.web.get("/api/sessions", params={"date": "2026-10-18"}).json()
+        self.assertEqual([row["id"] for row in data["sessions"]], ["next", "late"])
+
+    def test_date_filter_combines_with_search_and_pagination(self):
+        self.seed()
+        for offset, expected in ((0, "newer-b"), (1, "newer-a")):
+            with self.subTest(offset=offset):
+                data = self.web.get("/api/sessions", params={
+                    "date": "2026-10-18", "q": "newer", "limit": 1, "offset": offset,
+                }).json()
+                self.assertEqual(data["total"], 2)
+                self.assertEqual([row["id"] for row in data["sessions"]], [expected])
+        data = self.web.get("/api/sessions", params={"date": "2026-10-17", "q": "newer"}).json()
+        self.assertEqual(data["total"], 0)
+        self.assertEqual(data["sessions"], [])
+
+    def test_date_filter_supports_fractional_and_negative_timezones(self):
+        self.save("offset-time", [{"role": "user", "content": "跨日对话"}],
+                  datetime.datetime.fromisoformat("2026-10-18T00:00:00+05:30"))
+        for timezone, date in ((5.5, "2026-10-18"), (-7, "2026-10-17")):
+            with self.subTest(timezone=timezone):
+                self.client.config["timezone"] = timezone
+                data = self.web.get("/api/sessions", params={"date": date}).json()
+                self.assertEqual([row["id"] for row in data["sessions"]], ["offset-time"])
+
+    def test_invalid_dates_return_400_without_creating_database(self):
+        for date in ("2026-02-30", "2026-13-01", "2026-10", "20261018", "2026-1-1", "0000-01-01"):
+            with self.subTest(date=date):
+                response = self.web.get("/api/sessions", params={"date": date})
+                self.assertEqual(response.status_code, 400)
+                self.assertFalse(response.json()["ok"])
+        self.assertFalse(self.path.parent.exists())
+
     def test_list_is_paginated_and_ordered_with_counts_and_user_preview(self):
         self.seed()
         response = self.web.get("/api/sessions", params={"limit": 2})
