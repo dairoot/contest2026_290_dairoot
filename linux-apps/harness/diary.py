@@ -394,17 +394,19 @@ def save_memory(path: str, content: str) -> dict:
     return record
 
 
-def list_diaries(path: str, *, limit: int = 20, offset: int = 0) -> dict:
-    """按日期从新到旧分页列出日记，附当天整理进日记的会话数。"""
-    result = {"diaries": [], "total": 0, "limit": limit, "offset": offset}
+def list_diaries(path: str, month: str) -> dict:
+    """某个月（YYYY-MM）的日记，按日期升序，附当天整理进日记的会话数；first / last 是全部日记的日期范围。"""
+    result = {"month": month, "diaries": [], "first": "", "last": ""}
     with _read_database(path) as session:
         if session is None or not _has_tables(session, DiaryEntry.__tablename__, DiarySession.__tablename__):
             return result
-        result["total"] = session.scalar(select(func.count()).select_from(DiaryEntry))
+        first, last = session.execute(select(func.min(DiaryEntry.date), func.max(DiaryEntry.date))).one()
+        result["first"], result["last"] = first or "", last or ""
         session_count = select(func.count()).where(DiarySession.date == DiaryEntry.date).scalar_subquery()
         rows = session.execute(
             select(DiaryEntry.date, DiaryEntry.content, DiaryEntry.updated_at, session_count.label("session_count"))
-            .order_by(DiaryEntry.date.desc()).limit(limit).offset(offset)
+            .where(DiaryEntry.date.startswith(f"{month}-", autoescape=True))
+            .order_by(DiaryEntry.date)
         ).mappings()
         result["diaries"] = [dict(row) for row in rows]
     return result

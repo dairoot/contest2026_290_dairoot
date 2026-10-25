@@ -179,6 +179,10 @@ button:disabled { opacity:.5; cursor:default; }
 #msg-count { color:var(--muted); font-weight:400; }
 #voiceprint-open { margin-left:auto; }
 #voiceprint-open, #diary-open, #history-open, #restart { padding:4px 10px; font-size:12px; }
+#diary-open {  /* 跳到 /diary 日记页的链接，外观跟旁边的按钮一致 */
+  border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg); text-decoration:none;
+}
+#diary-open:hover { color:var(--accent); border-color:var(--accent); }
 .chat > h2 { flex-wrap:wrap; }
 #messages { flex:1; overflow-y:auto; padding-right:4px; }
 .msg { border-left:3px solid var(--line); padding:2px 0 8px 10px; margin-bottom:12px; }
@@ -199,23 +203,6 @@ button:disabled { opacity:.5; cursor:default; }
 #voiceprint-note { min-height:1.6em; margin:10px 0; }
 .voiceprint-profile { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:13px; }
 .voiceprint-profile button { margin-left:auto; padding:2px 8px; font-size:12px; }
-#diary-dialog { width:min(720px, calc(100vw - 32px)); max-height:85dvh; padding:22px; overflow-y:auto; border:1px solid var(--line); border-radius:12px; background:var(--card); color:var(--fg); }
-#diary-dialog::backdrop { background:#10182866; }
-#diary-close { margin-left:auto; }
-#diary-dialog h3 { display:flex; align-items:center; gap:8px; margin:20px 0 6px; font-size:13px; }
-#diary-dialog h2 + h3 { margin-top:4px; }
-#diary-dialog h3 .meta { color:var(--muted); font-size:12px; font-weight:400; }
-#diary-dialog .hint { margin-bottom:8px; }
-.diary-actions { display:flex; align-items:center; gap:8px; margin-top:8px; }
-.diary-actions button, #diary-run, #diary-more { padding:4px 10px; font-size:12px; }
-#diary-run { margin-left:auto; }
-#diary-status { min-height:1.6em; margin:0; }
-.diary-entry { border-left:3px solid var(--accent); padding:2px 0 4px 10px; margin:12px 0; }
-.diary-entry .head { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 10px; }
-.diary-entry .date { font-size:13px; font-weight:600; }
-.diary-entry .meta { font-size:12px; color:var(--muted); }
-#diary-list .empty.err { color:var(--err); }
-@media (max-width:720px) { #diary-dialog { padding:16px; } }
 .body { white-space:pre-wrap; word-break:break-word; margin-top:2px; }
 .voice {  /* 用户这句话的录音：文字前面的小胶囊，点了播/暂停，背景从左往右填充当进度 */
   display:inline-flex; align-items:center; gap:5px; vertical-align:middle; margin-right:8px;
@@ -472,7 +459,7 @@ details.thinking pre { color:var(--muted); }
   </section>
 
   <section class="card chat">
-    <h2>聊天信息 <span id="msg-count"></span><button id="voiceprint-open" type="button">声纹</button><button id="diary-open" type="button">日记</button><button id="history-open" type="button">历史会话</button><button id="restart">重新开始</button></h2>
+    <h2>聊天信息 <span id="msg-count"></span><button id="voiceprint-open" type="button">声纹</button><a id="diary-open" href="/diary">日记</a><button id="history-open" type="button">历史会话</button><button id="restart">重新开始</button></h2>
     <div id="banner" class="banner" hidden></div>
     <div id="messages"></div>
     <div class="composer">
@@ -534,23 +521,6 @@ details.thinking pre { color:var(--muted); }
       <div id="history-messages"></div>
     </section>
   </div>
-</dialog>
-
-<dialog id="diary-dialog" aria-labelledby="diary-title">
-  <h2><span id="diary-title">AI 日记</span><button id="diary-close" type="button" aria-label="关闭日记">关闭</button></h2>
-  <h3>记忆 <span id="memory-meta" class="meta"></span></h3>
-  <p class="hint">新会话开始时接在人设后面，供助手参考；保存后下次会话生效。对助手的长期要求请写在人设里。</p>
-  <label class="history-sr-only" for="memory-text">长期记忆</label>
-  <textarea id="memory-text" rows="7" maxlength="2000" placeholder="还没有记忆。每行一条，例如：- 小明：喜欢喝美式"></textarea>
-  <div class="diary-actions">
-    <button id="memory-save" class="primary" type="button" disabled>保存记忆</button>
-    <button id="memory-clear" type="button">清空</button>
-    <span id="memory-note" class="note" role="status" aria-live="polite"></span>
-  </div>
-  <h3>日记 <button id="diary-run" type="button">立即整理</button></h3>
-  <p id="diary-status" class="note" role="status" aria-live="polite"></p>
-  <div id="diary-list"></div>
-  <button id="diary-more" type="button" hidden>加载更多</button>
 </dialog>
 
 <script>
@@ -1650,204 +1620,6 @@ $("#history-search").addEventListener("submit", (event) => {
 $("#history-prev").addEventListener("click", () => loadHistory(Math.max(0, historyOffset - HISTORY_PAGE_SIZE)));
 $("#history-next").addEventListener("click", () => loadHistory(historyOffset + HISTORY_PAGE_SIZE));
 
-// ---------------- AI 日记与记忆 ----------------
-
-const DIARY_PAGE_SIZE = 20;
-let diaryOffset = 0;
-let diaryRequest = null;
-let memoryDirty = false;   // 记忆框有没保存的改动时，刷新不覆盖它
-let memorySaving = false;
-let lastDiaryFinishedAt = "";
-let diaryRequestedFrom = null;  // 点「立即整理」时的 finished_at；它变了说明这一轮已经结束
-
-function diaryDateLabel(value) {  // "YYYY-MM-DD" 是本地日期，按年月日构造，避免 new Date(str) 当成 UTC 零点
-  const [year, month, day] = value.split("-").map(Number);
-  const date = new Date(year, month - 1, day);
-  if (Number.isNaN(date.getTime())) return value;
-  const today = new Date();
-  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
-  const weekday = "星期" + "日一二三四五六"[date.getDay()];
-  if (date.toDateString() === today.toDateString()) return "今天 · " + weekday;
-  if (date.toDateString() === yesterday.toDateString()) return "昨天 · " + weekday;
-  return date.toLocaleDateString("zh-CN", {
-    month: "long", day: "numeric", ...(year !== today.getFullYear() ? { year: "numeric" } : {}),
-  }) + " " + weekday;
-}
-
-function diaryClock(value) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", {
-    month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
-  });
-}
-
-function diaryBusy() {
-  const state = fullState.diary || {};
-  return Boolean(state.running) || (diaryRequestedFrom !== null && (state.finished_at || "") === diaryRequestedFrom);
-}
-
-function renderDiaryStatus() {
-  const state = fullState.diary || {};
-  const working = diaryBusy();
-  $("#diary-run").disabled = working;
-  let text = "每小时自动整理一次已结束的会话";
-  let kind = "";
-  if (working) {
-    text = "正在整理日记…";
-  } else if (state.error) {
-    text = "上次整理失败：" + state.error;
-    kind = "err";
-  } else if (state.finished_at) {
-    const clock = new Date(state.finished_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
-    const dates = (state.dates || []).map((value) => {
-      const [, month, day] = value.split("-").map(Number);
-      return month + "月" + day + "日";
-    });
-    text = clock + " 整理完成，" + (dates.length ? "更新了 " + dates.join("、") + " 的日记" : "没有新的对话");
-    if (state.pending) text += "；还有 " + state.pending + " 个会话待整理";
-    if (state.skipped) text += "，其中 " + state.skipped + " 个被模型拒绝，下一轮重试";
-    kind = "ok";
-  }
-  $("#diary-status").textContent = text;
-  $("#diary-status").className = "note " + kind;
-}
-
-function memoryNote(text, ok) {
-  $("#memory-note").textContent = text;
-  $("#memory-note").className = "note " + (ok ? "ok" : "err");
-}
-
-function renderMemory(memory) {
-  $("#memory-text").value = memory.content || "";
-  const source = memory.source === "manual" ? (memory.content ? "手动修改" : "已清空") : "自动整理";
-  $("#memory-meta").textContent = memory.updated_at ? source + " · " + diaryClock(memory.updated_at) : "";
-  memoryDirty = false;
-  $("#memory-save").disabled = true;
-}
-
-async function loadMemory() {
-  try {
-    const res = await fetch("/api/memory", { cache: "no-store" });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "读取失败");
-    if (!memoryDirty) renderMemory(data.memory);  // 加载期间开始编辑的话，保留编辑内容
-  } catch (error) {
-    memoryNote("读取记忆失败：" + (error.message || error), false);
-  }
-}
-
-async function saveMemory(content, success) {
-  if (memorySaving) return;
-  memorySaving = true;
-  $("#memory-save").disabled = $("#memory-clear").disabled = true;
-  memoryNote("正在保存…", true);
-  try {
-    const res = await fetch("/api/memory", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "保存失败");
-    renderMemory(data.memory);
-    memoryNote(success, true);
-  } catch (error) {
-    memoryNote(error.message || String(error), false);
-    $("#memory-save").disabled = !memoryDirty;
-  } finally {
-    memorySaving = false;
-    $("#memory-clear").disabled = false;
-  }
-}
-
-function renderDiaryEntry(entry) {
-  const node = el("article", "diary-entry");
-  const head = el("div", "head");
-  head.append(
-    el("span", "date", diaryDateLabel(entry.date)),
-    el("span", "meta", entry.session_count + " 次对话 · 更新于 " + diaryClock(entry.updated_at)),
-  );
-  node.append(head, el("div", "body", entry.content));
-  return node;
-}
-
-async function loadDiaries(offset = 0) {
-  if (diaryRequest) diaryRequest.abort();
-  const request = diaryRequest = new AbortController();
-  if (!offset) $("#diary-list").replaceChildren(el("div", "empty", "正在加载…"));
-  $("#diary-more").disabled = true;
-  try {
-    const params = new URLSearchParams({ limit: DIARY_PAGE_SIZE, offset });
-    const res = await fetch("/api/diaries?" + params, { signal: request.signal, cache: "no-store" });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "查询失败，请重试");
-    if (request !== diaryRequest) return;
-    const nodes = data.diaries.map(renderDiaryEntry);
-    if (offset) $("#diary-list").append(...nodes);
-    else $("#diary-list").replaceChildren(...(nodes.length ? nodes
-      : [el("div", "empty", "还没有日记。会话结束后每小时自动整理，也可以点「立即整理」。")]));
-    diaryOffset = offset + data.diaries.length;
-    $("#diary-more").hidden = diaryOffset >= data.total;
-  } catch (error) {
-    if (error.name === "AbortError" || request !== diaryRequest) return;
-    const note = el("div", "empty err", "暂时无法加载日记：" + (error.message || error));
-    if (offset) $("#diary-list").append(note);
-    else $("#diary-list").replaceChildren(note);
-  } finally {
-    if (request === diaryRequest) {
-      diaryRequest = null;
-      $("#diary-more").disabled = false;
-    }
-  }
-}
-
-async function runDiary() {
-  $("#diary-run").disabled = true;
-  try {
-    const res = await fetch("/api/diaries/update", { method: "POST" });
-    const data = await res.json();
-    if (!res.ok || !data.ok) throw new Error(data.error || "启动失败");
-    diaryRequestedFrom = data.diary.finished_at || "";
-    renderDiaryStatus();
-  } catch (error) {
-    $("#diary-status").textContent = error.message || String(error);
-    $("#diary-status").className = "note err";
-    $("#diary-run").disabled = diaryBusy();
-  }
-}
-
-function refreshDiary() {  // SSE 每帧调用：一轮整理结束（finished_at 变了）就重载日记，记忆框没改动时一并重载
-  const finishedAt = fullState.diary?.finished_at || "";
-  if (finishedAt !== lastDiaryFinishedAt) {
-    lastDiaryFinishedAt = finishedAt;
-    diaryRequestedFrom = null;
-    loadDiaries();
-    if (!memoryDirty) loadMemory();
-  }
-  renderDiaryStatus();
-}
-
-$("#diary-open").addEventListener("click", () => {
-  $("#diary-dialog").showModal();
-  lastDiaryFinishedAt = fullState.diary?.finished_at || "";
-  memoryNote("", true);
-  renderDiaryStatus();
-  if (!memoryDirty) loadMemory();
-  loadDiaries();
-});
-$("#diary-close").addEventListener("click", () => $("#diary-dialog").close());
-$("#diary-dialog").addEventListener("close", () => {
-  if (diaryRequest) diaryRequest.abort();
-});
-$("#memory-text").addEventListener("input", () => {
-  memoryDirty = true;
-  $("#memory-save").disabled = memorySaving;
-});
-$("#memory-save").addEventListener("click", () => saveMemory($("#memory-text").value, "已保存，下次会话生效"));
-$("#memory-clear").addEventListener("click", () => {
-  if (confirm("清空全部记忆？助手从下次会话开始不再记得这些内容。")) saveMemory("", "已清空，下次会话生效");
-});
-$("#diary-run").addEventListener("click", runDiary);
-$("#diary-more").addEventListener("click", () => loadDiaries(diaryOffset));
-
 // 完整状态只在页面加载、保存配置 / 重新开始、装完 MCP 包这几处取；跑起来会变的那部分走下面的 SSE
 async function loadState() {
   try {
@@ -2016,7 +1788,6 @@ loadState().then(() => {
     messages = messages.slice(0, data.start).concat(data.messages);
     fullState = { ...fullState, ...data.status };
     if ($("#voiceprint-dialog").open) renderVoiceprints();
-    if ($("#diary-dialog").open) refreshDiary();
     if (busy) return;  // 重启中的中间态（ChatBot 是 None，消息是空的）先收着不画，重启完会取完整状态
     renderStatus(fullState);
     renderMessages(messages, fullState.compression);
