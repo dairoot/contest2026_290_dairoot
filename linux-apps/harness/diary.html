@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 日记 · harness</title>
+<style>
+:root {
+  --bg:#f4f6f8; --card:#fff; --fg:#1b1e23; --muted:#6b7280; --line:#e2e6ea;
+  --accent:#2563eb; --ok:#16a34a; --warn:#c2740a; --err:#dc2626;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#15171a; --card:#1d2024; --fg:#e6e8eb; --muted:#9aa1a9; --line:#2c3036;
+    --accent:#4b8bf5; --ok:#4ade80; --warn:#f0b45e; --err:#f87171;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--bg); color:var(--fg);
+  font:14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+header {
+  position:sticky; top:0; z-index:2; display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px;
+  padding:12px 18px; background:var(--card); border-bottom:1px solid var(--line);
+}
+h1 { font-size:15px; margin:0; }
+h2 { font-size:13px; margin:0; display:flex; align-items:center; gap:8px; }
+.back {
+  font-size:12px; padding:2px 9px; border-radius:99px; border:1px solid var(--line);
+  color:var(--muted); text-decoration:none;
+}
+.back:hover { color:var(--accent); border-color:var(--accent); }
+button {
+  font:inherit; padding:7px 14px; border-radius:8px; cursor:pointer;
+  border:1px solid var(--line); background:var(--card); color:var(--fg);
+}
+button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+button:disabled { opacity:.5; cursor:default; }
+.note { font-size:12px; flex:1; min-width:0; line-height:1.5; color:var(--muted); }
+.note.ok { color:var(--ok); }
+.note.err { color:var(--err); }
+#diary-status { text-align:right; }
+#diary-run { padding:4px 10px; font-size:12px; }
+main {
+  display:grid; grid-template-columns:minmax(0, 1fr) 380px; gap:16px; align-items:start;
+  max-width:1360px; margin:0 auto; padding:16px;
+}
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; min-width:0; }
+.side { display:flex; flex-direction:column; gap:16px; min-width:0; }
+.meta { color:var(--muted); font-size:12px; font-weight:400; }
+.empty { color:var(--muted); font-size:13px; }
+
+/* 月历 */
+.cal-head { display:flex; align-items:center; gap:6px; margin-bottom:12px; }
+.cal-head h2 { font-size:16px; font-weight:650; min-width:7.5em; justify-content:center; font-variant-numeric:tabular-nums; }
+.cal-head button { padding:3px 10px; font-size:13px; }
+#cal-today { margin-left:auto; font-size:12px; }
+.cal-grid { display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:6px; }
+.cal-weekday { padding:0 0 4px; text-align:center; font-size:12px; color:var(--muted); }
+.cal-weekday.weekend { color:color-mix(in srgb, var(--accent) 55%, var(--muted)); }
+.cal-day {
+  display:flex; flex-direction:column; gap:3px; min-width:0; min-height:104px; padding:7px 8px;
+  text-align:left; border:1px solid var(--line); border-radius:8px; background:var(--card); color:var(--fg);
+}
+.cal-day:hover:not(:disabled) { border-color:var(--accent); }
+.cal-day:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.cal-day.has-diary {
+  background:color-mix(in srgb, var(--accent) 7%, var(--card));
+  border-color:color-mix(in srgb, var(--accent) 28%, var(--line));
+}
+.cal-day[aria-pressed="true"] { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+.cal-day:disabled { opacity:.4; }
+.cal-num { display:flex; align-items:center; gap:6px; font-size:13px; font-weight:600; font-variant-numeric:tabular-nums; }
+.cal-day:not(.has-diary) .cal-num { color:var(--muted); font-weight:500; }
+.cal-day.today .cal-num { color:var(--accent); }
+.cal-tag { font-size:10px; font-weight:500; padding:0 5px; border-radius:4px; color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); }
+.cal-preview {
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+  font-size:11.5px; line-height:1.5; color:var(--muted); overflow-wrap:anywhere;
+}
+.cal-count { margin-top:auto; font-size:11px; color:var(--accent); }
+.cal-foot { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; margin:12px 0 0; font-size:12px; color:var(--muted); }
+.cal-foot.err { color:var(--err); }
+.cal-foot button { padding:0; border:0; background:none; color:var(--accent); font-size:12px; }
+
+/* 当天日记 */
+#entry-date { font-size:15px; font-weight:650; }
+#entry-meta { margin:2px 0 12px; }
+#entry-meta:empty { display:none; }
+#entry-body { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.85; }
+
+/* 记忆 */
+.hint { color:var(--muted); font-size:12px; margin:6px 0 8px; }
+textarea {
+  display:block; width:100%; resize:vertical; font:inherit; color:var(--fg); background:var(--bg);
+  border:1px solid var(--line); border-radius:8px; padding:7px 9px;
+}
+textarea:focus { outline:none; border-color:var(--accent); }
+.memory-actions { display:flex; align-items:center; gap:8px; margin-top:8px; }
+.memory-actions button { padding:4px 10px; font-size:12px; flex:none; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0, 0, 0, 0); white-space:nowrap; border:0; }
+
+@media (max-width:900px) {
+  main { grid-template-columns:1fr; }
+}
+@media (max-width:640px) {
+  header { padding:10px 12px; }
+  #diary-status { order:3; flex-basis:100%; text-align:left; }
+  main { padding:12px 10px; gap:12px; }
+  .card { padding:12px; }
+  .cal-grid { gap:4px; }
+  .cal-day { align-items:center; min-height:50px; padding:6px 2px; }
+  .cal-tag, .cal-preview { display:none; }
+  .cal-count { font-size:0; }  /* 窄屏只留一个小圆点 */
+  .cal-day.has-diary .cal-count::before { content:""; display:block; width:6px; height:6px; border-radius:50%; background:var(--accent); }
+}
+</style>
+</head>
+<body>
+<header>
+  <a class="back" href="/">← 配置台</a>
+  <h1>AI 日记</h1>
+  <span id="diary-status" class="note" role="status" aria-live="polite"></span>
+  <button id="diary-run" type="button">立即整理</button>
+</header>
+
+<main>
+  <section class="card" aria-labelledby="cal-title">
+    <div class="cal-head">
+      <button id="cal-prev" type="button" aria-label="上个月">‹</button>
+      <h2 id="cal-title" aria-live="polite"></h2>
+      <button id="cal-next" type="button" aria-label="下个月">›</button>
+      <button id="cal-today" type="button">今天</button>
+    </div>
+    <div class="cal-grid" aria-hidden="true">
+      <div class="cal-weekday">一</div><div class="cal-weekday">二</div><div class="cal-weekday">三</div>
+      <div class="cal-weekday">四</div><div class="cal-weekday">五</div>
+      <div class="cal-weekday weekend">六</div><div class="cal-weekday weekend">日</div>
+    </div>
+    <div id="cal-days" class="cal-grid"></div>
+    <p id="cal-foot" class="cal-foot" role="status"></p>
+  </section>
+
+  <div class="side">
+    <section class="card" aria-labelledby="entry-date">
+      <h2 id="entry-date">选择日期</h2>
+      <div id="entry-meta" class="meta"></div>
+      <div id="entry-body"></div>
+    </section>
+
+    <section class="card" aria-labelledby="memory-title">
+      <h2 id="memory-title">记忆 <span id="memory-meta" class="meta"></span></h2>
+      <p class="hint">新会话开始时接在人设后面，供助手参考；保存后下次会话生效。对助手的长期要求请写在人设里。</p>
+      <label class="sr-only" for="memory-text">长期记忆</label>
+      <textarea id="memory-text" rows="9" maxlength="2000" placeholder="还没有记忆。每行一条，例如：- 小明：喜欢喝美式"></textarea>
+      <div class="memory-actions">
+        <button id="memory-save" class="primary" type="button" disabled>保存记忆</button>
+        <button id="memory-clear" type="button">清空</button>
+        <span id="memory-note" class="note" role="status" aria-live="polite"></span>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+let month = "";         // 正在显示的月份 YYYY-MM
+let selected = "";      // 选中的日期 YYYY-MM-DD
+let entries = {};       // 当前月份：日期 → 日记
+let range = { first: "", last: "" };  // 全部日记的日期范围，翻月和「跳到最近一篇」用
+let monthRequest = null;
+let memoryDirty = false;  // 记忆框有没保存的改动时，刷新不覆盖它
+let memorySaving = false;
+let diaryState = {};      // 服务端整理状态（SSE 推送的 status.diary）
+let lastFinishedAt = null;
+let requestedFrom = null;  // 点「立即整理」时的 finished_at；它变了说明这一轮已经结束
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+const pad = (n) => String(n).padStart(2, "0");
+const ymd = (date) => date.getFullYear() + "-" + pad(date.getMonth() + 1) + "-" + pad(date.getDate());
+const today = () => ymd(new Date());
+
+function parseDate(value) {  // 日记日期是本地日期，按年月日构造，避免 new Date(str) 当成 UTC 零点
+  const [year, mon, day] = value.split("-").map(Number);
+  return new Date(year, mon - 1, day || 1);
+}
+
+function shiftMonth(value, delta) {
+  const date = parseDate(value + "-01");
+  date.setMonth(date.getMonth() + delta);
+  return date.getFullYear() + "-" + pad(date.getMonth() + 1);
+}
+
+function dateLabel(value) {
+  const date = parseDate(value);
+  return date.getFullYear() + "年" + (date.getMonth() + 1) + "月" + date.getDate() + "日 星期" + "日一二三四五六"[date.getDay()];
+}
+
+function shortDate(value) {
+  const date = parseDate(value);
+  return (date.getMonth() + 1) + "月" + date.getDate() + "日";
+}
+
+function clock(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString("zh-CN", {
+    month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+}
+
+// ---------------- 月历 ----------------
+
+function renderCalendar() {
+  const [year, mon] = month.split("-").map(Number);
+  $("#cal-title").textContent = year + "年" + mon + "月";
+  const lead = (new Date(year, mon - 1, 1).getDay() + 6) % 7;  // 周一开头
+  const days = new Date(year, mon, 0).getDate();
+  const now = today();
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push(el("div"));
+  for (let day = 1; day <= days; day++) {
+    const date = month + "-" + pad(day);
+    const entry = entries[date];
+    const cell = el("button", "cal-day" + (entry ? " has-diary" : "") + (date === now ? " today" : ""));
+    cell.type = "button";
+    cell.dataset.date = date;
+    cell.disabled = date > now && !entry;  // 还没到的日子
+    cell.setAttribute("aria-pressed", String(date === selected));
+    cell.setAttribute("aria-label", dateLabel(date) + (entry ? "，" + entry.session_count + " 次对话" : "，没有日记"));
+    const num = el("span", "cal-num", String(day));
+    if (date === now) num.append(el("span", "cal-tag", "今天"));
+    cell.append(num);
+    if (entry) cell.append(el("span", "cal-preview", entry.content), el("span", "cal-count", entry.session_count + " 次对话"));
+    cell.addEventListener("click", () => select(date));
+    cells.push(cell);
+  }
+  $("#cal-days").replaceChildren(...cells);
+
+  const latestMonth = range.last.slice(0, 7);
+  $("#cal-prev").disabled = !range.first || month <= range.first.slice(0, 7);
+  $("#cal-next").disabled = month >= (latestMonth > now.slice(0, 7) ? latestMonth : now.slice(0, 7));
+  const count = Object.keys(entries).length;
+  const foot = $("#cal-foot");
+  foot.className = "cal-foot";
+  foot.replaceChildren(el("span", null, count ? "本月 " + count + " 篇日记" : range.last ? "本月还没有日记" : "还没有日记，会话结束后每小时自动整理"));
+  if (range.last && !range.last.startsWith(month)) {
+    const jump = el("button", null, "跳到最近一篇（" + shortDate(range.last) + "）");
+    jump.type = "button";
+    jump.addEventListener("click", () => loadMonth(latestMonth, range.last));
+    foot.append(jump);
+  }
+}
+
+function pickDefault() {  // 今天有日记就选今天，否则选本月最近的一篇
+  if (entries[today()]) return today();
+  return Object.keys(entries).sort().pop() || "";
+}
+
+function select(date) {
+  selected = date;
+  for (const cell of $("#cal-days").querySelectorAll(".cal-day")) {
+    cell.setAttribute("aria-pressed", String(cell.dataset.date === date));
+  }
+  renderEntry();
+  history.replaceState(null, "", date ? "#" + date : location.pathname);
+}
+
+function renderEntry() {
+  const entry = entries[selected];
+  if (!selected) {
+    $("#entry-date").textContent = "选择日期";
+    $("#entry-meta").textContent = "";
+    $("#entry-body").replaceChildren(el("div", "empty", "点日历上标出的日期查看当天的日记。"));
+    return;
+  }
+  $("#entry-date").textContent = dateLabel(selected);
+  if (entry) {
+    $("#entry-meta").textContent = entry.session_count + " 次对话 · 更新于 " + clock(entry.updated_at);
+    $("#entry-body").textContent = entry.content;
+  } else {
+    $("#entry-meta").textContent = "";
+    $("#entry-body").replaceChildren(el("div", "empty", "这天没有日记。"));
+  }
+}
+
+async function loadMonth(value, preferred = "") {
+  if (monthRequest) monthRequest.abort();
+  const request = monthRequest = new AbortController();
+  month = value;
+  $("#cal-title").textContent = value.replace(/^(\d{4})-0?(\d+)$/, "$1年$2月");
+  $("#cal-foot").textContent = "正在加载…";
+  try {
+    const res = await fetch("/api/diaries?month=" + value, { signal: request.signal, cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "加载失败，请重试");
+    if (request !== monthRequest) return;
+    entries = Object.fromEntries(data.diaries.map((entry) => [entry.date, entry]));
+    range = { first: data.first, last: data.last };
+    selected = preferred.startsWith(value) ? preferred : selected.startsWith(value) ? selected : pickDefault();
+    renderCalendar();
+    renderEntry();
+    history.replaceState(null, "", selected ? "#" + selected : location.pathname);
+  } catch (error) {
+    if (error.name === "AbortError" || request !== monthRequest) return;
+    $("#cal-days").replaceChildren();
+    $("#cal-foot").className = "cal-foot err";
+    $("#cal-foot").textContent = "暂时无法加载日记：" + (error.message || error);
+  } finally {
+    if (request === monthRequest) monthRequest = null;
+  }
+}
+
+// ---------------- 整理状态 ----------------
+
+function diaryBusy() {
+  return Boolean(diaryState.running) || (requestedFrom !== null && (diaryState.finished_at || "") === requestedFrom);
+}
+
+function renderStatus() {
+  const working = diaryBusy();
+  $("#diary-run").disabled = working;
+  let text = "每小时自动整理一次已结束的会话";
+  let kind = "";
+  if (working) {
+    text = "正在整理日记…";
+  } else if (diaryState.error) {
+    text = "上次整理失败：" + diaryState.error;
+    kind = "err";
+  } else if (diaryState.finished_at) {
+    const at = new Date(diaryState.finished_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+    const dates = (diaryState.dates || []).map(shortDate);
+    text = at + " 整理完成，" + (dates.length ? "更新了 " + dates.join("、") + " 的日记" : "没有新的对话");
+    if (diaryState.pending) text += "；还有 " + diaryState.pending + " 个会话待整理";
+    if (diaryState.skipped) text += "，其中 " + diaryState.skipped + " 个被模型拒绝，下一轮重试";
+    kind = "ok";
+  }
+  $("#diary-status").textContent = text;
+  $("#diary-status").className = "note " + kind;
+}
+
+async function runDiary() {
+  $("#diary-run").disabled = true;
+  try {
+    const res = await fetch("/api/diaries/update", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "启动失败");
+    requestedFrom = data.diary.finished_at || "";
+    renderStatus();
+  } catch (error) {
+    $("#diary-status").textContent = error.message || String(error);
+    $("#diary-status").className = "note err";
+    $("#diary-run").disabled = diaryBusy();
+  }
+}
+
+// ---------------- 记忆 ----------------
+
+function memoryNote(text, ok) {
+  $("#memory-note").textContent = text;
+  $("#memory-note").className = "note " + (ok ? "ok" : "err");
+}
+
+function renderMemory(memory) {
+  $("#memory-text").value = memory.content || "";
+  const source = memory.source === "manual" ? (memory.content ? "手动修改" : "已清空") : "自动整理";
+  $("#memory-meta").textContent = memory.updated_at ? source + " · " + clock(memory.updated_at) : "";
+  memoryDirty = false;
+  $("#memory-save").disabled = true;
+}
+
+async function loadMemory() {
+  try {
+    const res = await fetch("/api/memory", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "读取失败");
+    if (!memoryDirty) renderMemory(data.memory);  // 加载期间开始编辑的话，保留编辑内容
+  } catch (error) {
+    memoryNote("读取记忆失败：" + (error.message || error), false);
+  }
+}
+
+async function saveMemory(content, success) {
+  if (memorySaving) return;
+  memorySaving = true;
+  $("#memory-save").disabled = $("#memory-clear").disabled = true;
+  memoryNote("正在保存…", true);
+  try {
+    const res = await fetch("/api/memory", {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "保存失败");
+    renderMemory(data.memory);
+    memoryNote(success, true);
+  } catch (error) {
+    memoryNote(error.message || String(error), false);
+    $("#memory-save").disabled = !memoryDirty;
+  } finally {
+    memorySaving = false;
+    $("#memory-clear").disabled = false;
+  }
+}
+
+// ---------------- 事件 ----------------
+
+$("#cal-prev").addEventListener("click", () => loadMonth(shiftMonth(month, -1)));
+$("#cal-next").addEventListener("click", () => loadMonth(shiftMonth(month, 1)));
+$("#cal-today").addEventListener("click", () => loadMonth(today().slice(0, 7), today()));
+$("#diary-run").addEventListener("click", runDiary);
+$("#memory-text").addEventListener("input", () => {
+  memoryDirty = true;
+  $("#memory-save").disabled = memorySaving;
+});
+$("#memory-save").addEventListener("click", () => saveMemory($("#memory-text").value, "已保存，下次会话生效"));
+$("#memory-clear").addEventListener("click", () => {
+  if (confirm("清空全部记忆？助手从下次会话开始不再记得这些内容。")) saveMemory("", "已清空，下次会话生效");
+});
+
+// 整理状态跟配置台共用 SSE：后台每小时那一轮和点「立即整理」都会推过来，一轮结束就刷新本月和记忆
+const events = new EventSource("/api/events");
+events.onmessage = (event) => {
+  const state = JSON.parse(event.data).status?.diary;
+  if (!state) return;
+  diaryState = state;
+  const finishedAt = state.finished_at || "";
+  if (lastFinishedAt !== null && finishedAt !== lastFinishedAt) {
+    requestedFrom = null;
+    loadMonth(month);
+    if (!memoryDirty) loadMemory();
+  }
+  lastFinishedAt = finishedAt;
+  renderStatus();
+};
+
+renderStatus();
+loadMemory();
+const initial = /^#\d{4}-\d{2}-\d{2}$/.test(location.hash) ? location.hash.slice(1) : "";
+loadMonth((initial || today()).slice(0, 7), initial).then(() => {
+  // 直接打开且本月还没有日记时，跳到最近有日记的月份
+  if (!initial && !Object.keys(entries).length && range.last) loadMonth(range.last.slice(0, 7), range.last);
+});
+</script>
+</body>
+</html>

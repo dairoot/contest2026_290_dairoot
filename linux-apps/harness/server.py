@@ -1,6 +1,7 @@
-"""web 配置台的 HTTP 层：一个页面、配置与安装接口、一个录音代理。
+"""web 配置台的 HTTP 层：配置台和日记两个页面、配置与安装接口、一个录音代理。
 
 - GET  /             页面
+- GET  /diary        AI 日记页面：月历查看日记、编辑长期记忆
 - GET  /api/config   当前配置 + SDK 的 TTS 引擎目录 + 麦克风列表（页面加载时填表单，之后不再轮询，免得覆盖正在编辑的内容）
 - POST /api/config   保存配置并按新配置重建 ChatBot
 - POST /api/restart  用当前配置重开一轮会话
@@ -14,7 +15,7 @@
 - GET  /api/events   SSE：把会变的那部分状态和 llm.messages 推给页面，代替轮询
 - GET  /api/sessions?q=...&limit=20&offset=0  从数据库搜索历史会话并分页
 - GET  /api/sessions/{session_id}  从数据库读取会话消息
-- GET  /api/diaries?limit=20&offset=0  AI 日记列表，按日期从新到旧
+- GET  /api/diaries?month=YYYY-MM  某月的日记（按日期升序）及全部日记的日期范围
 - POST /api/diaries/update  唤醒后台马上整理一轮日记和记忆，进度见 status.diary
 - GET  /api/memory   当前长期记忆
 - PUT  /api/memory   保存页面修改的记忆（空串即清空），下次会话生效
@@ -26,6 +27,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
@@ -40,6 +42,8 @@ from aichat_sdk.config import ASR_SERVER_WS_URL
 from skill_install import MAX_UPLOAD_BYTES
 
 INDEX_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+DIARY_HTML = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diary.html")
+MONTH = re.compile(r"\d{4}-(0[1-9]|1[0-2])")  # 日记页按月查询，YYYY-MM
 EVENT_INTERVAL = 0.5  # 秒；SSE 每隔这么久看一眼状态变没变
 logger = logging.getLogger("web_console")
 
@@ -159,16 +163,15 @@ def create_app(client) -> Starlette:
             return JSONResponse({"ok": False, "error": "会话不存在"}, status_code=404)
         return JSONResponse({"ok": True, "session": record}, headers={"Cache-Control": "no-store"})
 
+    async def diary_page(request: Request):
+        return FileResponse(DIARY_HTML)
+
     async def get_diaries(request: Request):
+        month = request.query_params.get("month", "")
+        if not MONTH.fullmatch(month):
+            return JSONResponse({"ok": False, "error": "month 需为 YYYY-MM 格式的月份，例如 2026-10"}, status_code=400)
         try:
-            limit = int(request.query_params.get("limit", "20"))
-            offset = int(request.query_params.get("offset", "0"))
-            if not 1 <= limit <= 100 or offset < 0:
-                raise ValueError("limit 需为 1～100，offset 不能小于 0")
-        except ValueError as exc:
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
-        try:
-            data = await asyncio.to_thread(client.list_diaries, limit=limit, offset=offset)
+            data = await asyncio.to_thread(client.list_diaries, month)
         except (OSError, SQLAlchemyError):
             logger.exception("查询日记失败")
             return JSONResponse({"ok": False, "error": "日记暂时不可用，请稍后重试"}, status_code=503)
@@ -260,6 +263,7 @@ def create_app(client) -> Starlette:
             Route("/api/events", get_events),
             Route("/api/sessions", get_sessions),
             Route("/api/sessions/{session_id}", get_session),
+            Route("/diary", diary_page),
             Route("/api/diaries", get_diaries),
             Route("/api/diaries/update", post_diary_update, methods=["POST"]),
             Route("/api/memory", get_memory),
