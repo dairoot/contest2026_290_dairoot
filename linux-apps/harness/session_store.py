@@ -132,13 +132,23 @@ def _read_database(path: str):
         engine.dispose()
 
 
-def query_sessions(path: str, *, query: str = "", limit: int = 20, offset: int = 0) -> dict:
-    """按会话 ID 或任意消息内容搜索，返回最近开始的会话摘要。"""
+def query_sessions(
+    path: str, *, query: str = "", date: str = "", timezone: float = 8, limit: int = 20, offset: int = 0,
+) -> dict:
+    """按会话 ID、消息内容和配置时区的开始日期筛选，返回最近开始的会话摘要。"""
     result = {"sessions": [], "total": 0, "limit": limit, "offset": offset}
     with _read_database(path) as session:
         if session is None:
             return result
         filters = []
+        if date:
+            start = datetime.datetime.combine(
+                datetime.date.fromisoformat(date), datetime.time.min,
+                tzinfo=datetime.timezone(datetime.timedelta(hours=timezone)),
+            )
+            start_day = func.julianday(start.isoformat())
+            session_day = func.julianday(func.datetime(ChatSession.started_at))
+            filters.extend((session_day >= start_day, session_day < start_day + 1))
         if query:
             filters.append(or_(
                 ChatSession.id.contains(query, autoescape=True),

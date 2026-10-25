@@ -89,6 +89,12 @@ main {
 #entry-meta { margin:2px 0 12px; }
 #entry-meta:empty { display:none; }
 #entry-body { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.85; }
+#entry-history {
+  display:inline-block; margin-top:14px; padding:5px 10px; border:1px solid var(--line);
+  border-radius:8px; color:var(--accent); font-size:12px; text-decoration:none;
+}
+#entry-history:hover { border-color:var(--accent); background:var(--bg); }
+#entry-history[hidden] { display:none; }
 
 /* 记忆 */
 .hint { color:var(--muted); font-size:12px; margin:6px 0 8px; }
@@ -147,6 +153,7 @@ textarea:focus { outline:none; border-color:var(--accent); }
       <h2 id="entry-date">选择日期</h2>
       <div id="entry-meta" class="meta"></div>
       <div id="entry-body"></div>
+      <a id="entry-history" href="/history" hidden>查看当天历史会话 →</a>
     </section>
 
     <section class="card" aria-labelledby="memory-title">
@@ -274,6 +281,8 @@ function select(date) {
 
 function renderEntry() {
   const entry = entries[selected];
+  $("#entry-history").hidden = !selected;
+  $("#entry-history").href = "/history?" + new URLSearchParams({ date: selected });
   if (!selected) {
     $("#entry-date").textContent = "选择日期";
     $("#entry-meta").textContent = "";
